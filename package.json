@@ -23,5 +23,8 @@
     "helmet": "^8.1.0",
     "pg": "^8.11.3",
     "pg-hstore": "^2.3.4"
+  },
+  "devDependencies": {
+    "@flydotio/dockerfile": "^0.7.10"
   }
 }
