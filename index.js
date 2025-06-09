@@ -8,6 +8,9 @@ const rateLimit = require('express-rate-limit');
 
 const app = express();
 
+// Trust proxy for rate limiter
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet());
 app.use(cors({
@@ -85,13 +88,17 @@ app.delete('/api/tokens/:companyName', async (req, res) => {
 app.get('/api/callback', async (req, res) => {
   const { code } = req.query;
 
+  if (!code) {
+    return res.status(400).send('Authorization code is missing');
+  }
+
   try {
     const response = await axios.post('https://login.salesforce.com/services/oauth2/token', null, {
       params: {
         grant_type: 'authorization_code',
-        client_id: '3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8',
-        client_secret: 'D045509520DAFB16B200A09BB882A7822CEA5E10C66C993196D7153DB4C2D4C6',
-        redirect_uri: 'https://workpunch-backend.onrender.com/api/callback',
+        client_id: process.env.SALESFORCE_CLIENT_ID,
+        client_secret: process.env.SALESFORCE_CLIENT_SECRET,
+        redirect_uri: process.env.SALESFORCE_REDIRECT_URI,
         code
       }
     });
@@ -105,10 +112,10 @@ app.get('/api/callback', async (req, res) => {
       instance_url
     });
 
-    res.send('Salesforce successfully connected!');
+    res.send('Salesforce successfully connected! You can close this window.');
   } catch (error) {
-    console.error(error.response?.data || error.message);
-    res.status(500).send('Salesforce auth failed.');
+    console.error('Salesforce auth error:', error.response?.data || error.message);
+    res.status(500).send('Salesforce authentication failed. Please try again.');
   }
 });
 
@@ -181,6 +188,12 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+app.get('/ping', (req, res) => {
+  console.log('✅ /ping route was hit');
+  res.send('Pong!');
+});
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
