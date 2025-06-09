@@ -81,6 +81,99 @@ app.delete('/api/tokens/:companyName', async (req, res) => {
   }
 });
 
+// OAuth callback endpoint
+app.get('/api/callback', async (req, res) => {
+  const { code } = req.query;
+
+  try {
+    const response = await axios.post('https://login.salesforce.com/services/oauth2/token', null, {
+      params: {
+        grant_type: 'authorization_code',
+        client_id: '3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8',
+        client_secret: 'D045509520DAFB16B200A09BB882A7822CEA5E10C66C993196D7153DB4C2D4C6',
+        redirect_uri: 'https://workpunch-backend.onrender.com/api/callback',
+        code
+      }
+    });
+
+    const { access_token, refresh_token, instance_url } = response.data;
+
+    // Save tokens to database using our tokenHelpers
+    await tokenHelpers.storeTokens('NewCompany', {
+      access_token,
+      refresh_token,
+      instance_url
+    });
+
+    res.send('Salesforce successfully connected!');
+  } catch (error) {
+    console.error(error.response?.data || error.message);
+    res.status(500).send('Salesforce auth failed.');
+  }
+});
+
+// Sync user data endpoint
+app.post('/api/sync-user', async (req, res) => {
+  try {
+    const { id, name, clockRecords, totalRemoteHours, totalInPersonHours } = req.body;
+    const companyName = name; // Using name as company name for now
+
+    const tokens = await tokenHelpers.getTokens(companyName);
+    if (!tokens) return res.status(404).json({ error: 'Company not authorized' });
+
+    // Sync each clock record to Salesforce
+    for (const record of clockRecords) {
+      const recordPayload = {
+        Punch_In_Time__c: record.clockIn,
+        Punch_Out_Time__c: record.clockOut,
+        Location_Type__c: record.isRemote ? 'Remote' : 'In Office',
+        Employee_Email__c: id
+      };
+
+      await axios.post(`${tokens.instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error syncing user data:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to sync user data to Salesforce' });
+  }
+});
+
+// Sync individual clock record endpoint
+app.post('/api/sync-clock', async (req, res) => {
+  const { userId, clockIn, clockOut, isRemote, companyName } = req.body;
+
+  try {
+    const tokens = await tokenHelpers.getTokens(companyName);
+    if (!tokens) return res.status(404).json({ error: 'Company not authorized' });
+
+    const recordPayload = {
+      Punch_In_Time__c: clockIn,
+      Punch_Out_Time__c: clockOut,
+      Location_Type__c: isRemote ? 'Remote' : 'In Office',
+      Employee_Email__c: userId
+    };
+
+    const response = await axios.post(`${tokens.instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
+      headers: {
+        Authorization: `Bearer ${tokens.access_token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    res.status(200).json({ success: true, salesforceId: response.data.id });
+  } catch (error) {
+    console.error('Salesforce sync error:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to sync to Salesforce' });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
