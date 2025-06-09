@@ -39,6 +39,12 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
 // Health check endpoints
 app.get('/', (req, res) => res.send('Workpunch backend is live!'));
 app.get('/ping', (req, res) => {
@@ -241,10 +247,8 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
-  console.log('Registered routes:');
-  app._router.stack.forEach(r => {
-    if (r.route && r.route.path) {
-      console.log(`${Object.keys(r.route.methods).join(', ').toUpperCase()} ${r.route.path}`);
-    }
-  });
+  console.log('Available routes:');
+  console.log('GET  /');
+  console.log('GET  /ping');
+  console.log('GET  /api/callback');
 });
