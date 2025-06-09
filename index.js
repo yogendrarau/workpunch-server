@@ -27,8 +27,12 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Health check endpoint
+// Health check endpoints
 app.get('/', (req, res) => res.send('Workpunch backend is live!'));
+app.get('/ping', (req, res) => {
+  console.log('✅ /ping route was hit');
+  res.send('Pong!');
+});
 
 // Token management endpoints
 app.post('/api/tokens', async (req, res) => {
@@ -188,12 +192,6 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-
-app.get('/ping', (req, res) => {
-  console.log('✅ /ping route was hit');
-  res.send('Pong!');
-});
-
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
