@@ -8,14 +8,19 @@ const rateLimit = require('express-rate-limit');
 
 const app = express();
 
-// Log environment variables (without sensitive data)
-console.log('Environment check:', {
-  NODE_ENV: process.env.NODE_ENV,
-  PORT: process.env.PORT,
-  ALLOWED_ORIGIN: process.env.ALLOWED_ORIGIN,
-  SALESFORCE_REDIRECT_URI: process.env.SALESFORCE_REDIRECT_URI,
-  SALESFORCE_CLIENT_ID: process.env.SALESFORCE_CLIENT_ID ? 'Set' : 'Not Set',
-  SALESFORCE_CLIENT_SECRET: process.env.SALESFORCE_CLIENT_SECRET ? 'Set' : 'Not Set'
+// Debug middleware - log ALL requests before any other middleware
+app.use((req, res, next) => {
+  console.log('🔍 Incoming request:', {
+    timestamp: new Date().toISOString(),
+    method: req.method,
+    url: req.url,
+    path: req.path,
+    originalUrl: req.originalUrl,
+    headers: req.headers,
+    query: req.query,
+    body: req.body
+  });
+  next();
 });
 
 // Trust proxy for rate limiter
@@ -39,20 +44,6 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Request logging middleware
-app.use((req, res, next) => {
-  console.log('Request details:', {
-    timestamp: new Date().toISOString(),
-    method: req.method,
-    url: req.url,
-    path: req.path,
-    originalUrl: req.originalUrl,
-    headers: req.headers,
-    query: req.query
-  });
-  next();
-});
-
 // Health check endpoints
 app.get('/', (req, res) => {
   console.log('Root endpoint hit');
@@ -62,6 +53,12 @@ app.get('/', (req, res) => {
 app.get('/ping', (req, res) => {
   console.log('✅ /ping route was hit');
   res.send('Pong!');
+});
+
+// Debug route to test routing
+app.get('/api/test', (req, res) => {
+  console.log('Test route hit');
+  res.send('Test route working');
 });
 
 // Token management endpoints
@@ -262,5 +259,6 @@ app.listen(PORT, () => {
   console.log('Available routes:');
   console.log('GET  /');
   console.log('GET  /ping');
+  console.log('GET  /api/test');
   console.log('GET  /api/callback');
 });
