@@ -6,19 +6,37 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
+// Process level error handling
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Keep the process running
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Keep track of server state
+let serverState = {
+  startTime: null,
+  requestCount: 0,
+  lastRequest: null
+};
+
 const app = express();
 
 // Debug middleware - log ALL requests before any other middleware
 app.use((req, res, next) => {
-  console.log('🔍 Incoming request:', {
-    timestamp: new Date().toISOString(),
+  serverState.requestCount++;
+  serverState.lastRequest = new Date().toISOString();
+  console.log(`[${new Date().toISOString()}] Request #${serverState.requestCount}:`, {
     method: req.method,
     url: req.url,
     path: req.path,
     originalUrl: req.originalUrl,
-    headers: req.headers,
     query: req.query,
-    body: req.body
+    headers: req.headers
   });
   next();
 });
@@ -26,10 +44,14 @@ app.use((req, res, next) => {
 // Trust proxy for rate limiter
 app.set('trust proxy', 1);
 
-// Security middleware
-app.use(helmet());
+// Security middleware - temporarily disable helmet for testing
+// app.use(helmet({
+//   crossOriginResourcePolicy: { policy: "cross-origin" },
+//   crossOriginOpenerPolicy: { policy: "unsafe-none" }
+// }));
+
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN || '*',
+  origin: '*',  // Allow all origins temporarily for testing
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -37,17 +59,21 @@ app.use(cors({
 
 app.use(express.json());
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use(limiter);
+// Rate limiting - temporarily disable for testing
+// app.use(limiter);
 
 // Health check endpoints
 app.get('/', (req, res) => {
   console.log('Root endpoint hit');
-  res.send('Workpunch backend is live!');
+  res.json({
+    status: 'ok',
+    uptime: process.uptime(),
+    serverState: {
+      startTime: serverState.startTime,
+      requestCount: serverState.requestCount,
+      lastRequest: serverState.lastRequest
+    }
+  });
 });
 
 app.get('/ping', (req, res) => {
@@ -59,6 +85,61 @@ app.get('/ping', (req, res) => {
 app.get('/api/test', (req, res) => {
   console.log('Test route hit');
   res.send('Test route working');
+});
+
+// OAuth callback endpoint - moved before other routes for testing
+app.get('/api/callback', async (req, res) => {
+  console.log('🔔 Callback endpoint hit - START');
+  console.log('Full URL:', req.protocol + '://' + req.get('host') + req.originalUrl);
+  console.log('Query params:', req.query);
+  console.log('Headers:', req.headers);
+  
+  const { code } = req.query;
+
+  if (!code) {
+    console.error('No authorization code received');
+    return res.status(400).send('Authorization code is missing');
+  }
+
+  try {
+    const tokenRequestParams = {
+      grant_type: 'authorization_code',
+      client_id: process.env.SALESFORCE_CLIENT_ID,
+      client_secret: process.env.SALESFORCE_CLIENT_SECRET,
+      redirect_uri: process.env.SALESFORCE_REDIRECT_URI,
+      code
+    };
+
+    console.log('📡 Requesting tokens from Salesforce...');
+
+    const response = await axios.post('https://login.salesforce.com/services/oauth2/token', null, {
+      params: tokenRequestParams
+    });
+
+    const { access_token, refresh_token, instance_url } = response.data;
+
+    if (!access_token || !refresh_token || !instance_url) {
+      console.error('❌ Missing tokens from response:', response.data);
+      return res.status(500).send('Invalid response from Salesforce');
+    }
+
+    console.log('💾 Storing tokens in DB...');
+    await tokenHelpers.storeTokens('NewCompany', {
+      access_token,
+      refresh_token,
+      instance_url
+    });
+
+    console.log('✅ Tokens stored successfully for NewCompany');
+    return res.send('Salesforce successfully connected! You can close this window.');
+  } catch (error) {
+    console.error('❌ Salesforce auth error:', {
+      message: error.message,
+      data: error.response?.data,
+      status: error.response?.status
+    });
+    return res.status(500).send('Salesforce authentication failed. Check logs.');
+  }
 });
 
 // Token management endpoints
@@ -112,59 +193,6 @@ app.delete('/api/tokens/:companyName', async (req, res) => {
   } catch (error) {
     console.error('Error invalidating tokens:', error);
     res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// OAuth callback endpoint
-app.get('/api/callback', async (req, res) => {
-  console.log('🔔 Callback endpoint hit - START');
-  console.log('Full URL:', req.protocol + '://' + req.get('host') + req.originalUrl);
-  console.log('Query params:', req.query);
-  const { code } = req.query;
-
-  if (!code) {
-    console.error('No authorization code received');
-    return res.status(400).send('Authorization code is missing');
-  }
-
-  try {
-    const tokenRequestParams = {
-      grant_type: 'authorization_code',
-      client_id: process.env.SALESFORCE_CLIENT_ID,
-      client_secret: process.env.SALESFORCE_CLIENT_SECRET,
-      redirect_uri: process.env.SALESFORCE_REDIRECT_URI,
-      code
-    };
-
-    console.log('📡 Requesting tokens from Salesforce...');
-
-    const response = await axios.post('https://login.salesforce.com/services/oauth2/token', null, {
-      params: tokenRequestParams
-    });
-
-    const { access_token, refresh_token, instance_url } = response.data;
-
-    if (!access_token || !refresh_token || !instance_url) {
-      console.error('❌ Missing tokens from response:', response.data);
-      return res.status(500).send('Invalid response from Salesforce');
-    }
-
-    console.log('💾 Storing tokens in DB...');
-    await tokenHelpers.storeTokens('NewCompany', {
-      access_token,
-      refresh_token,
-      instance_url
-    });
-
-    console.log('✅ Tokens stored successfully for NewCompany');
-    return res.send('Salesforce successfully connected! You can close this window.');
-  } catch (error) {
-    console.error('❌ Salesforce auth error:', {
-      message: error.message,
-      data: error.response?.data,
-      status: error.response?.status
-    });
-    return res.status(500).send('Salesforce authentication failed. Check logs.');
   }
 });
 
@@ -236,7 +264,8 @@ app.use((err, req, res, next) => {
     error: err.message,
     stack: err.stack,
     url: req.url,
-    method: req.method
+    method: req.method,
+    timestamp: new Date().toISOString()
   });
   res.status(500).json({ error: 'Something broke!' });
 });
@@ -248,17 +277,29 @@ app.use((req, res) => {
     url: req.url,
     path: req.path,
     originalUrl: req.originalUrl,
-    headers: req.headers
+    headers: req.headers,
+    timestamp: new Date().toISOString()
   });
   res.status(404).send('Not Found');
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+const server = app.listen(PORT, () => {
+  serverState.startTime = new Date().toISOString();
+  console.log(`[${serverState.startTime}] Server is running on port ${PORT}`);
   console.log('Available routes:');
   console.log('GET  /');
   console.log('GET  /ping');
   console.log('GET  /api/test');
   console.log('GET  /api/callback');
+});
+
+// Handle server errors
+server.on('error', (error) => {
+  console.error('Server error:', error);
+});
+
+// Handle server close
+server.on('close', () => {
+  console.log('Server is shutting down...');
 });
