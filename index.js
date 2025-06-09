@@ -8,6 +8,16 @@ const rateLimit = require('express-rate-limit');
 
 const app = express();
 
+// Log environment variables (without sensitive data)
+console.log('Environment check:', {
+  NODE_ENV: process.env.NODE_ENV,
+  PORT: process.env.PORT,
+  ALLOWED_ORIGIN: process.env.ALLOWED_ORIGIN,
+  SALESFORCE_REDIRECT_URI: process.env.SALESFORCE_REDIRECT_URI,
+  SALESFORCE_CLIENT_ID: process.env.SALESFORCE_CLIENT_ID ? 'Set' : 'Not Set',
+  SALESFORCE_CLIENT_SECRET: process.env.SALESFORCE_CLIENT_SECRET ? 'Set' : 'Not Set'
+});
+
 // Trust proxy for rate limiter
 app.set('trust proxy', 1);
 
@@ -16,8 +26,10 @@ app.use(helmet());
 app.use(cors({
   origin: process.env.ALLOWED_ORIGIN || '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
 }));
+
 app.use(express.json());
 
 // Rate limiting
@@ -90,6 +102,7 @@ app.delete('/api/tokens/:companyName', async (req, res) => {
 
 // OAuth callback endpoint
 app.get('/api/callback', async (req, res) => {
+  console.log('🔔 Callback endpoint hit');
   const { code } = req.query;
 
   if (!code) {
@@ -215,11 +228,23 @@ app.post('/api/sync-clock', async (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Global error handler:', err.stack);
   res.status(500).json({ error: 'Something broke!' });
+});
+
+// 404 handler - must be after all other routes
+app.use((req, res) => {
+  console.log('404 Not Found:', req.method, req.url);
+  res.status(404).send('Not Found');
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  console.log('Registered routes:');
+  app._router.stack.forEach(r => {
+    if (r.route && r.route.path) {
+      console.log(`${Object.keys(r.route.methods).join(', ').toUpperCase()} ${r.route.path}`);
+    }
+  });
 });
