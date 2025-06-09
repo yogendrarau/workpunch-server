@@ -41,12 +41,24 @@ app.use(limiter);
 
 // Request logging middleware
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  console.log('Request details:', {
+    timestamp: new Date().toISOString(),
+    method: req.method,
+    url: req.url,
+    path: req.path,
+    originalUrl: req.originalUrl,
+    headers: req.headers,
+    query: req.query
+  });
   next();
 });
 
 // Health check endpoints
-app.get('/', (req, res) => res.send('Workpunch backend is live!'));
+app.get('/', (req, res) => {
+  console.log('Root endpoint hit');
+  res.send('Workpunch backend is live!');
+});
+
 app.get('/ping', (req, res) => {
   console.log('✅ /ping route was hit');
   res.send('Pong!');
@@ -108,7 +120,7 @@ app.delete('/api/tokens/:companyName', async (req, res) => {
 
 // OAuth callback endpoint
 app.get('/api/callback', async (req, res) => {
-  console.log('🔔 Callback endpoint hit');
+  console.log('🔔 Callback endpoint hit with query:', req.query);
   const { code } = req.query;
 
   if (!code) {
@@ -234,13 +246,24 @@ app.post('/api/sync-clock', async (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Global error handler:', err.stack);
+  console.error('Global error handler:', {
+    error: err.message,
+    stack: err.stack,
+    url: req.url,
+    method: req.method
+  });
   res.status(500).json({ error: 'Something broke!' });
 });
 
 // 404 handler - must be after all other routes
 app.use((req, res) => {
-  console.log('404 Not Found:', req.method, req.url);
+  console.log('404 Not Found:', {
+    method: req.method,
+    url: req.url,
+    path: req.path,
+    originalUrl: req.originalUrl,
+    headers: req.headers
+  });
   res.status(404).send('Not Found');
 });
 
