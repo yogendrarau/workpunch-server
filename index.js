@@ -120,7 +120,9 @@ app.delete('/api/tokens/:companyName', async (req, res) => {
 
 // OAuth callback endpoint
 app.get('/api/callback', async (req, res) => {
-  console.log('🔔 Callback endpoint hit with query:', req.query);
+  console.log('🔔 Callback endpoint hit - START');
+  console.log('Full URL:', req.protocol + '://' + req.get('host') + req.originalUrl);
+  console.log('Query params:', req.query);
   const { code } = req.query;
 
   if (!code) {
@@ -129,9 +131,6 @@ app.get('/api/callback', async (req, res) => {
   }
 
   try {
-    console.log('Received authorization code:', code);
-    console.log('Making token request to Salesforce...');
-    
     const tokenRequestParams = {
       grant_type: 'authorization_code',
       client_id: process.env.SALESFORCE_CLIENT_ID,
@@ -140,45 +139,35 @@ app.get('/api/callback', async (req, res) => {
       code
     };
 
-    console.log('Token request parameters:', {
-      ...tokenRequestParams,
-      client_secret: '***' // Hide secret in logs
-    });
+    console.log('📡 Requesting tokens from Salesforce...');
 
     const response = await axios.post('https://login.salesforce.com/services/oauth2/token', null, {
       params: tokenRequestParams
     });
 
-    console.log('Received response from Salesforce');
     const { access_token, refresh_token, instance_url } = response.data;
 
     if (!access_token || !refresh_token || !instance_url) {
-      console.error('Missing required tokens in response:', response.data);
+      console.error('❌ Missing tokens from response:', response.data);
       return res.status(500).send('Invalid response from Salesforce');
     }
 
-    console.log('Storing tokens in database...');
-    try {
-      await tokenHelpers.storeTokens('NewCompany', {
-        access_token,
-        refresh_token,
-        instance_url
-      });
-      console.log('Tokens stored successfully');
-    } catch (dbError) {
-      console.error('Database error:', dbError);
-      return res.status(500).send('Failed to store tokens in database');
-    }
-
-    res.send('Salesforce successfully connected! You can close this window.');
-  } catch (error) {
-    console.error('Salesforce auth error details:', {
-      message: error.message,
-      response: error.response?.data,
-      status: error.response?.status,
-      headers: error.response?.headers
+    console.log('💾 Storing tokens in DB...');
+    await tokenHelpers.storeTokens('NewCompany', {
+      access_token,
+      refresh_token,
+      instance_url
     });
-    res.status(500).send('Salesforce authentication failed. Please try again.');
+
+    console.log('✅ Tokens stored successfully for NewCompany');
+    return res.send('Salesforce successfully connected! You can close this window.');
+  } catch (error) {
+    console.error('❌ Salesforce auth error:', {
+      message: error.message,
+      data: error.response?.data,
+      status: error.response?.status
+    });
+    return res.status(500).send('Salesforce authentication failed. Check logs.');
   }
 });
 
