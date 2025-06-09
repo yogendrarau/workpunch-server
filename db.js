@@ -6,9 +6,19 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
+// Test DB connection immediately
+pool.query('SELECT NOW()', (err, res) => {
+  if (err) {
+    console.error('❌ DB CONNECTION FAILED:', err.message);
+  } else {
+    console.log('✅ DB CONNECTED — current time:', res.rows[0].now);
+  }
+});
+
 // Initialize database tables
 const initializeDatabase = async () => {
   try {
+    console.log('🔧 Initializing companies table...');
     await pool.query(`
       CREATE TABLE IF NOT EXISTS companies (
         id SERIAL PRIMARY KEY,
@@ -23,15 +33,15 @@ const initializeDatabase = async () => {
       )
     `);
 
-    // Create index for faster lookups
     await pool.query('CREATE INDEX IF NOT EXISTS idx_company_name ON companies(company_name)');
+    console.log('✅ Table check complete');
   } catch (error) {
-    console.error('Error initializing database:', error);
+    console.error('❌ Error initializing database:', error.message);
     throw error;
   }
 };
 
-// Initialize the database
+// Initialize on load
 initializeDatabase();
 
 // Helper functions for token management
@@ -40,28 +50,33 @@ const tokenHelpers = {
   storeTokens: async (companyName, tokens) => {
     const { access_token, refresh_token, instance_url } = tokens;
     const now = new Date().toISOString();
-    
+
+    console.log(`🟡 Storing tokens for company: ${companyName}`);
+    console.log(`🟡 Instance URL sample: ${instance_url?.slice(0, 30)}...`);
+
     try {
       const result = await pool.query(
         `INSERT INTO companies (company_name, access_token, refresh_token, instance_url, created_at, updated_at, last_token_refresh)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT(company_name) DO UPDATE SET
-         access_token = EXCLUDED.access_token,
-         refresh_token = EXCLUDED.refresh_token,
-         instance_url = EXCLUDED.instance_url,
-         updated_at = EXCLUDED.updated_at,
-         last_token_refresh = EXCLUDED.last_token_refresh
+           access_token = EXCLUDED.access_token,
+           refresh_token = EXCLUDED.refresh_token,
+           instance_url = EXCLUDED.instance_url,
+           updated_at = EXCLUDED.updated_at,
+           last_token_refresh = EXCLUDED.last_token_refresh
          RETURNING id`,
         [companyName, access_token, refresh_token, instance_url, now, now, now]
       );
+
+      console.log(`✅ Tokens stored. Company ID: ${result.rows[0].id}`);
       return result.rows[0].id;
     } catch (error) {
-      console.error('Error storing tokens:', error);
+      console.error('❌ Error storing tokens:', error.message);
       throw error;
     }
   },
 
-  // Get company tokens
+  // Get tokens
   getTokens: async (companyName) => {
     try {
       const result = await pool.query(
@@ -70,12 +85,12 @@ const tokenHelpers = {
       );
       return result.rows[0];
     } catch (error) {
-      console.error('Error getting tokens:', error);
+      console.error('❌ Error getting tokens:', error.message);
       throw error;
     }
   },
 
-  // Invalidate company tokens
+  // Invalidate tokens
   invalidateTokens: async (companyName) => {
     try {
       const result = await pool.query(
@@ -84,7 +99,7 @@ const tokenHelpers = {
       );
       return result.rowCount;
     } catch (error) {
-      console.error('Error invalidating tokens:', error);
+      console.error('❌ Error invalidating tokens:', error.message);
       throw error;
     }
   }
