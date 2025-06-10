@@ -283,7 +283,7 @@ app.post('/api/sync-user', async (req, res) => {
 
 // Sync individual clock record endpoint
 app.post('/api/sync-clock', async (req, res) => {
-  const { userId, clockIn, clockOut, isRemote } = req.body;
+  const { userId, clockIn, clockOut, isRemote, timezone } = req.body;
 
   try {
     // Get the company tokens from the database
@@ -297,19 +297,63 @@ app.post('/api/sync-clock', async (req, res) => {
     // Extract name from email (everything before @)
     const personName = userId.split('@')[0];
     
-    // Format date as YYYY-MM-DD
-    const dateStr = new Date(clockIn).toISOString().split('T')[0];
+    // Parse the dates and ensure they're in the correct timezone
+    const clockInDate = new Date(clockIn);
+    const clockOutDate = clockOut ? new Date(clockOut) : null;
     
-    // Create the record payload for Salesforce
+    // Format date as YYYY-MM-DD using the local time
+    const dateStr = clockInDate.toLocaleDateString('en-US', { timeZone: timezone }).split(',')[0];
+    
+    // If clocking out, find and update the existing record
+    if (clockOut) {
+      // Query Salesforce for the most recent record for this user on this date
+      const queryResponse = await axios.get(
+        `${company.salesforce_instance_url}/services/data/v59.0/query`,
+        {
+          headers: {
+            Authorization: `Bearer ${company.salesforce_access_token}`,
+          },
+          params: {
+            q: `
+              SELECT Id 
+              FROM Workpunch__c 
+              WHERE Employee_Email__c = '${userId}'
+              AND Punch_In_Time__c = ${clockInDate.toISOString()}
+              ORDER BY CreatedDate DESC 
+              LIMIT 1
+            `
+          }
+        }
+      );
+
+      if (queryResponse.data.records.length > 0) {
+        // Update the existing record
+        const recordId = queryResponse.data.records[0].Id;
+        await axios.patch(
+          `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c/${recordId}`,
+          {
+            Punch_Out_Time__c: clockOutDate.toISOString()
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${company.salesforce_access_token}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        return res.status(200).json({ success: true, salesforceId: recordId });
+      }
+    }
+
+    // If clocking in or no existing record found, create a new record
     const recordPayload = {
-      Name: `${personName} - ${dateStr}`,  // Set the record name
-      Punch_In_Time__c: clockIn,
-      Punch_Out_Time__c: clockOut,
+      Name: `${personName} - ${dateStr}`,
+      Punch_In_Time__c: clockInDate.toISOString(),
+      Punch_Out_Time__c: clockOutDate?.toISOString(),
       Location_Type__c: isRemote ? 'Remote' : 'In Office',
       Employee_Email__c: userId
     };
 
-    // Send to Salesforce using the stored tokens
     const response = await axios.post(
       `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`,
       recordPayload,
