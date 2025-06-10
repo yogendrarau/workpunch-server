@@ -299,11 +299,11 @@ app.post('/api/connect-salesforce', async (req, res) => {
   console.log('🔗 Connect Salesforce endpoint hit');
   console.log('Request body:', req.body);
 
-  const { companyDomain, companyName } = req.body;
+  const { companyDomain } = req.body;
 
-  if (!companyDomain || !companyName) {
-    console.error('Missing required fields:', { companyDomain, companyName });
-    return res.status(400).json({ error: 'Missing required fields: companyDomain and companyName' });
+  if (!companyDomain) {
+    console.error('Missing required field:', { companyDomain });
+    return res.status(400).json({ error: 'Missing required field: companyDomain' });
   }
 
   try {
@@ -312,7 +312,7 @@ app.post('/api/connect-salesforce', async (req, res) => {
     
     // Store initial company record
     await tokenHelpers.storeTokens(
-      companyName,
+      companyDomain.split('.')[0], // Use domain prefix as company name
       companyDomain,
       organizationCode,
       {
@@ -323,13 +323,6 @@ app.post('/api/connect-salesforce', async (req, res) => {
     );
 
     // Build the authorization URL
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: '3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8',
-      redirect_uri: 'https://workpunch-server.fly.dev/api/callback',
-      scope: 'api refresh_token'
-    });
-
     const authUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8&redirect_uri=https%3A%2F%2Fworkpunch-server.fly.dev%2Fapi%2Fcallback&scope=api%20refresh_token`;
 
     console.log('Generated auth URL:', authUrl);
@@ -337,7 +330,8 @@ app.post('/api/connect-salesforce', async (req, res) => {
 
     res.json({
       success: true,
-      organizationCode: organizationCode
+      organizationCode: organizationCode,
+      authUrl: authUrl
     });
   } catch (error) {
     console.error('Error generating auth URL:', error);
