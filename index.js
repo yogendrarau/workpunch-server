@@ -101,13 +101,26 @@ app.get('/api/callback', async (req, res) => {
     return res.status(400).send('Authorization code is missing');
   }
 
+  if (!state) {
+    console.error('No state parameter received');
+    return res.status(400).send('State parameter is missing. Please try the authorization flow again.');
+  }
+
   try {
     // Parse state parameter to get tenant ID and company name
-    const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+    let stateData;
+    try {
+      stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+    } catch (parseError) {
+      console.error('Failed to parse state parameter:', parseError);
+      return res.status(400).send('Invalid state parameter. Please try the authorization flow again.');
+    }
+
     const { tenantId, companyName } = stateData;
 
     if (!tenantId || !companyName) {
-      throw new Error('Missing tenant ID or company name in state');
+      console.error('Missing tenant ID or company name in state:', stateData);
+      return res.status(400).send('Invalid state data. Please try the authorization flow again.');
     }
 
     const tokenRequestParams = {
