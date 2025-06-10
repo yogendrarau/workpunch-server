@@ -157,52 +157,15 @@ app.get('/api/callback', async (req, res) => {
       return res.status(500).send('Invalid response from Salesforce');
     }
 
-    // Get the most recently created organization code
-    const organizationCode = await tokenHelpers.getLatestOrganizationCode();
-    console.log('Latest organization code:', organizationCode);
-
-    if (!organizationCode) {
-      console.log('No organization code found, creating new one...');
-      const newOrganizationCode = `org_${Date.now()}`;
-      const defaultCompanyName = 'Default Company';
-      const defaultDomain = 'default.com';
-
-      await tokenHelpers.storeTokens(
-        defaultCompanyName,
-        defaultDomain,
-        newOrganizationCode,
-        {
-          access_token,
-          refresh_token,
-          instance_url
-        }
-      );
-
-      console.log('✅ Created new organization with code:', newOrganizationCode);
-      return res.send(`Salesforce successfully connected! Your organization code is: ${newOrganizationCode}`);
-    }
-
-    // Get company info from the database
-    const companyInfo = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
-    if (!companyInfo) {
-      console.error('❌ No company info found for organization code:', organizationCode);
-      return res.status(500).send('Company information not found');
-    }
-
     // Store the tokens
-    await tokenHelpers.storeTokens(
-      companyInfo.companyName,
-      companyInfo.companyDomain,
-      organizationCode,
-      {
-        access_token,
-        refresh_token,
-        instance_url
-      }
-    );
+    await tokenHelpers.storeTokens({
+      access_token,
+      refresh_token,
+      instance_url
+    });
 
-    console.log('✅ Tokens stored successfully for organization:', organizationCode);
-    return res.send(`Salesforce successfully connected! Your organization code is: ${organizationCode}`);
+    console.log('✅ Tokens stored successfully');
+    return res.send('Salesforce successfully connected!');
   } catch (error) {
     console.error('❌ Salesforce auth error:', {
       message: error.message,
@@ -289,12 +252,10 @@ app.post('/api/sync-user', async (req, res) => {
   try {
     const { id, name, clockRecords, totalRemoteHours, totalInPersonHours } = req.body;
 
-    // Get the first company from the database
-    const result = await pool.query('SELECT * FROM companies ORDER BY created_at DESC LIMIT 1');
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'No company found in database' });
+    const tokens = await tokenHelpers.getTokens();
+    if (!tokens) {
+      return res.status(404).json({ error: 'No Salesforce connection found' });
     }
-    const company = result.rows[0];
 
     // Sync each clock record to Salesforce
     for (const record of clockRecords) {
@@ -305,9 +266,9 @@ app.post('/api/sync-user', async (req, res) => {
         Employee_Email__c: id
       };
 
-      await axios.post(`${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
+      await axios.post(`${tokens.instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
         headers: {
-          Authorization: `Bearer ${company.salesforce_access_token}`,
+          Authorization: `Bearer ${tokens.access_token}`,
           'Content-Type': 'application/json'
         }
       });
@@ -325,12 +286,10 @@ app.post('/api/sync-clock', async (req, res) => {
   const { userId, clockIn, clockOut, isRemote } = req.body;
 
   try {
-    // Get the first company from the database
-    const result = await pool.query('SELECT * FROM companies ORDER BY created_at DESC LIMIT 1');
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'No company found in database' });
+    const tokens = await tokenHelpers.getTokens();
+    if (!tokens) {
+      return res.status(404).json({ error: 'No Salesforce connection found' });
     }
-    const company = result.rows[0];
 
     const recordPayload = {
       Punch_In_Time__c: clockIn,
@@ -339,9 +298,9 @@ app.post('/api/sync-clock', async (req, res) => {
       Employee_Email__c: userId
     };
 
-    const response = await axios.post(`${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
+    const response = await axios.post(`${tokens.instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
       headers: {
-        Authorization: `Bearer ${company.salesforce_access_token}`,
+        Authorization: `Bearer ${tokens.access_token}`,
         'Content-Type': 'application/json'
       }
     });
@@ -356,39 +315,13 @@ app.post('/api/sync-clock', async (req, res) => {
 // Salesforce connection endpoint
 app.post('/api/connect-salesforce', async (req, res) => {
   console.log('🔗 Connect Salesforce endpoint hit');
-  console.log('Request body:', req.body);
-
-  const { companyDomain } = req.body;
-
-  if (!companyDomain) {
-    console.error('Missing required field:', { companyDomain });
-    return res.status(400).json({ error: 'Missing required field: companyDomain' });
-  }
 
   try {
-    // Generate organization code from timestamp
-    const organizationCode = `org_${Date.now()}`;
-    
-    // Store initial company record
-    await tokenHelpers.storeTokens(
-      companyDomain.split('.')[0], // Use domain prefix as company name
-      companyDomain,
-      organizationCode,
-      {
-        access_token: null,
-        refresh_token: null,
-        instance_url: null
-      }
-    );
-
     // Use fixed auth URL
     const authUrl = 'https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8&redirect_uri=https%3A%2F%2Fworkpunch-server.fly.dev%2Fapi%2Fcallback&scope=api%20refresh_token';
 
-    console.log('Organization code:', organizationCode);
-
     res.json({
       success: true,
-      organizationCode: organizationCode,
       authUrl: authUrl
     });
   } catch (error) {
@@ -400,28 +333,19 @@ app.post('/api/connect-salesforce', async (req, res) => {
 // Verify Salesforce connection status
 app.get('/api/verify-salesforce-connection', async (req, res) => {
   console.log('🔍 Verify Salesforce connection endpoint hit');
-  const { organizationCode, companyDomain } = req.query;
-
-  if (!organizationCode || !companyDomain) {
-    console.error('Missing required parameters');
-    return res.status(400).json({
-      connected: false,
-      message: 'Organization code and company domain are required'
-    });
-  }
 
   try {
-    const tokens = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
+    const tokens = await tokenHelpers.getTokens();
     
-    if (!tokens || tokens.companyDomain !== companyDomain) {
-      console.log('No valid connection found for organization:', organizationCode);
+    if (!tokens || !tokens.access_token) {
+      console.log('No valid connection found');
       return res.status(200).json({
         connected: false,
         message: 'Not connected to Salesforce'
       });
     }
 
-    console.log('✅ Salesforce connection found for organization:', organizationCode);
+    console.log('✅ Salesforce connection found');
     return res.status(200).json({
       connected: true,
       message: 'Connected to Salesforce'
@@ -437,16 +361,10 @@ app.get('/api/verify-salesforce-connection', async (req, res) => {
 
 // Get employees from Salesforce
 app.get('/api/employees', async (req, res) => {
-  const { organizationCode, companyDomain } = req.query;
-
-  if (!organizationCode || !companyDomain) {
-    return res.status(400).json({ error: 'Organization code and company domain are required' });
-  }
-
   try {
-    const tokens = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
-    if (!tokens || tokens.companyDomain !== companyDomain) {
-      return res.status(404).json({ error: 'Company not authorized for this organization' });
+    const tokens = await tokenHelpers.getTokens();
+    if (!tokens) {
+      return res.status(404).json({ error: 'No Salesforce connection found' });
     }
 
     // Query Salesforce for employees and their clock records
@@ -480,8 +398,7 @@ app.get('/api/employees', async (req, res) => {
           name: record.Employee_Name__c,
           clockRecords: [],
           totalRemoteHours: 0,
-          totalInPersonHours: 0,
-          organizationCode: organizationCode
+          totalInPersonHours: 0
         });
       }
 

@@ -26,9 +26,6 @@ async function initDb() {
     await pool.query(`
       CREATE TABLE companies (
         id SERIAL PRIMARY KEY,
-        company_name VARCHAR(255) NOT NULL,
-        company_domain VARCHAR(255) NOT NULL,
-        organization_code VARCHAR(255) UNIQUE NOT NULL,
         salesforce_access_token TEXT,
         salesforce_refresh_token TEXT,
         salesforce_instance_url TEXT,
@@ -54,37 +51,25 @@ async function initDb() {
 }
 
 const tokenHelpers = {
-  async storeTokens(companyName, companyDomain, organizationCode, tokens) {
+  async storeTokens(tokens) {
     const { access_token, refresh_token, instance_url } = tokens;
     try {
-      console.log('Storing tokens with:', {
-        companyName,
-        companyDomain,
-        organizationCode,
-        hasAccessToken: !!access_token,
-        hasRefreshToken: !!refresh_token,
-        hasInstanceUrl: !!instance_url
-      });
+      console.log('Storing tokens...');
 
       await pool.query(
-        `INSERT INTO companies (company_name, company_domain, organization_code, salesforce_access_token, salesforce_refresh_token, salesforce_instance_url)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (organization_code) 
+        `INSERT INTO companies (salesforce_access_token, salesforce_refresh_token, salesforce_instance_url)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) 
          DO UPDATE SET 
-           company_name = $1,
-           company_domain = $2,
-           salesforce_access_token = $4,
-           salesforce_refresh_token = $5,
-           salesforce_instance_url = $6,
+           salesforce_access_token = $1,
+           salesforce_refresh_token = $2,
+           salesforce_instance_url = $3,
            updated_at = CURRENT_TIMESTAMP`,
-        [companyName, companyDomain, organizationCode, access_token, refresh_token, instance_url]
+        [access_token, refresh_token, instance_url]
       );
 
       // Verify the stored data
-      const result = await pool.query(
-        'SELECT * FROM companies WHERE organization_code = $1',
-        [organizationCode]
-      );
+      const result = await pool.query('SELECT * FROM companies ORDER BY created_at DESC LIMIT 1');
       console.log('Stored data verification:', result.rows[0]);
     } catch (error) {
       console.error('Error storing tokens:', error);
@@ -92,57 +77,19 @@ const tokenHelpers = {
     }
   },
 
-  async getTokensByOrganizationCode(organizationCode) {
+  async getTokens() {
     try {
-      const result = await pool.query(
-        'SELECT * FROM companies WHERE organization_code = $1',
-        [organizationCode]
-      );
+      const result = await pool.query('SELECT * FROM companies ORDER BY created_at DESC LIMIT 1');
       if (result.rows.length === 0) return null;
       
       const company = result.rows[0];
       return {
-        companyName: company.company_name,
-        companyDomain: company.company_domain,
         access_token: company.salesforce_access_token,
         refresh_token: company.salesforce_refresh_token,
         instance_url: company.salesforce_instance_url
       };
     } catch (error) {
       console.error('Error getting tokens:', error);
-      throw error;
-    }
-  },
-
-  async getLatestOrganizationCode() {
-    try {
-      console.log('Getting latest organization code...');
-      const result = await pool.query(
-        'SELECT organization_code, company_name, company_domain FROM companies ORDER BY created_at DESC LIMIT 1'
-      );
-      console.log('Query result:', result.rows);
-      if (result.rows.length === 0) {
-        console.log('No organization codes found');
-        return null;
-      }
-      const orgCode = result.rows[0].organization_code;
-      console.log('Found organization code:', orgCode, 'for company:', result.rows[0].company_name);
-      return orgCode;
-    } catch (error) {
-      console.error('Error getting latest organization code:', error);
-      throw error;
-    }
-  },
-
-  async invalidateTokens(organizationCode) {
-    try {
-      const result = await pool.query(
-        'UPDATE companies SET salesforce_access_token = NULL, salesforce_refresh_token = NULL, salesforce_instance_url = NULL WHERE organization_code = $1',
-        [organizationCode]
-      );
-      return result.rowCount;
-    } catch (error) {
-      console.error('Error invalidating tokens:', error);
       throw error;
     }
   }
