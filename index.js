@@ -294,8 +294,15 @@ app.post('/api/sync-clock', async (req, res) => {
 
     const company = result.rows[0];
     
+    // Extract name from email (everything before @)
+    const personName = userId.split('@')[0];
+    
+    // Format date as YYYY-MM-DD
+    const dateStr = new Date(clockIn).toISOString().split('T')[0];
+    
     // Create the record payload for Salesforce
     const recordPayload = {
+      Name: `${personName} - ${dateStr}`,  // Set the record name
       Punch_In_Time__c: clockIn,
       Punch_Out_Time__c: clockOut,
       Location_Type__c: isRemote ? 'Remote' : 'In Office',
