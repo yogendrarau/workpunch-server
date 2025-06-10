@@ -87,10 +87,11 @@ app.get('/api/test', (req, res) => {
   res.send('Test route working');
 });
 
-// OAuth callback endpoint - moved before other routes for testing
+// OAuth callback endpoint
 app.get('/api/callback', async (req, res) => {
   console.log('🔔 Callback endpoint hit - START');
   console.log('Full URL:', req.protocol + '://' + req.get('host') + req.originalUrl);
+  console.log('Raw query string:', req.url.split('?')[1]);
   console.log('Query params:', req.query);
   console.log('Headers:', req.headers);
   
@@ -102,13 +103,15 @@ app.get('/api/callback', async (req, res) => {
   }
 
   if (!state) {
-    console.error('No state parameter received');
+    console.error('No state parameter received in callback');
+    console.log('Available query parameters:', Object.keys(req.query));
     return res.status(400).send('State parameter is missing. Please try the authorization flow again.');
   }
 
   try {
     // Decode the state parameter to get tenant ID
     const tenantId = decodeURIComponent(state);
+    console.log('Received state parameter:', state);
     console.log('Decoded tenant ID:', tenantId);
 
     const tokenRequestParams = {
@@ -298,12 +301,14 @@ app.post('/api/connect-salesforce', async (req, res) => {
   try {
     // Use tenantId as the state parameter
     const state = encodeURIComponent(tenantId);
+    console.log('Original tenant ID:', tenantId);
+    console.log('Encoded state:', state);
 
     // Use the specific Workpunch Salesforce connection URL with simplified state
     const authUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8&redirect_uri=https%3A%2F%2Fworkpunch-server.fly.dev%2Fapi%2Fcallback&scope=api%20refresh_token&state=${state}`;
 
     console.log('Generated auth URL:', authUrl);
-    console.log('State:', state);
+    console.log('State parameter in URL:', state);
 
     res.json({
       authUrl: authUrl
