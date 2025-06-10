@@ -287,10 +287,14 @@ app.get('/api/company/:organizationCode', async (req, res) => {
 // Sync user data endpoint
 app.post('/api/sync-user', async (req, res) => {
   try {
-    const { id, name, clockRecords, totalRemoteHours, totalInPersonHours, organizationCode } = req.body;
+    const { id, name, clockRecords, totalRemoteHours, totalInPersonHours } = req.body;
 
-    const tokens = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
-    if (!tokens) return res.status(404).json({ error: 'Company not authorized for this organization' });
+    // Get the first company from the database
+    const result = await pool.query('SELECT * FROM companies ORDER BY created_at DESC LIMIT 1');
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No company found in database' });
+    }
+    const company = result.rows[0];
 
     // Sync each clock record to Salesforce
     for (const record of clockRecords) {
@@ -301,9 +305,9 @@ app.post('/api/sync-user', async (req, res) => {
         Employee_Email__c: id
       };
 
-      await axios.post(`${tokens.instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
+      await axios.post(`${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
         headers: {
-          Authorization: `Bearer ${tokens.access_token}`,
+          Authorization: `Bearer ${company.salesforce_access_token}`,
           'Content-Type': 'application/json'
         }
       });
@@ -318,11 +322,15 @@ app.post('/api/sync-user', async (req, res) => {
 
 // Sync individual clock record endpoint
 app.post('/api/sync-clock', async (req, res) => {
-  const { userId, clockIn, clockOut, isRemote, organizationCode } = req.body;
+  const { userId, clockIn, clockOut, isRemote } = req.body;
 
   try {
-    const tokens = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
-    if (!tokens) return res.status(404).json({ error: 'Company not authorized for this organization' });
+    // Get the first company from the database
+    const result = await pool.query('SELECT * FROM companies ORDER BY created_at DESC LIMIT 1');
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No company found in database' });
+    }
+    const company = result.rows[0];
 
     const recordPayload = {
       Punch_In_Time__c: clockIn,
@@ -331,9 +339,9 @@ app.post('/api/sync-clock', async (req, res) => {
       Employee_Email__c: userId
     };
 
-    const response = await axios.post(`${tokens.instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
+    const response = await axios.post(`${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
       headers: {
-        Authorization: `Bearer ${tokens.access_token}`,
+        Authorization: `Bearer ${company.salesforce_access_token}`,
         'Content-Type': 'application/json'
       }
     });

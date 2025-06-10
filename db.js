@@ -57,6 +57,15 @@ const tokenHelpers = {
   async storeTokens(companyName, companyDomain, organizationCode, tokens) {
     const { access_token, refresh_token, instance_url } = tokens;
     try {
+      console.log('Storing tokens with:', {
+        companyName,
+        companyDomain,
+        organizationCode,
+        hasAccessToken: !!access_token,
+        hasRefreshToken: !!refresh_token,
+        hasInstanceUrl: !!instance_url
+      });
+
       await pool.query(
         `INSERT INTO companies (company_name, company_domain, organization_code, salesforce_access_token, salesforce_refresh_token, salesforce_instance_url)
          VALUES ($1, $2, $3, $4, $5, $6)
@@ -70,6 +79,13 @@ const tokenHelpers = {
            updated_at = CURRENT_TIMESTAMP`,
         [companyName, companyDomain, organizationCode, access_token, refresh_token, instance_url]
       );
+
+      // Verify the stored data
+      const result = await pool.query(
+        'SELECT * FROM companies WHERE organization_code = $1',
+        [organizationCode]
+      );
+      console.log('Stored data verification:', result.rows[0]);
     } catch (error) {
       console.error('Error storing tokens:', error);
       throw error;
@@ -102,15 +118,16 @@ const tokenHelpers = {
     try {
       console.log('Getting latest organization code...');
       const result = await pool.query(
-        'SELECT organization_code FROM companies ORDER BY created_at DESC LIMIT 1'
+        'SELECT organization_code, company_name, company_domain FROM companies ORDER BY created_at DESC LIMIT 1'
       );
       console.log('Query result:', result.rows);
       if (result.rows.length === 0) {
         console.log('No organization codes found');
         return null;
       }
-      console.log('Found organization code:', result.rows[0].organization_code);
-      return result.rows[0].organization_code;
+      const orgCode = result.rows[0].organization_code;
+      console.log('Found organization code:', orgCode, 'for company:', result.rows[0].company_name);
+      return orgCode;
     } catch (error) {
       console.error('Error getting latest organization code:', error);
       throw error;
