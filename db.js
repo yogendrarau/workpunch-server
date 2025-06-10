@@ -17,23 +17,30 @@ async function initDb() {
   try {
     console.log('Starting database initialization...');
     
-    // Drop the table if it exists
-    console.log('Dropping existing companies table...');
-    await pool.query('DROP TABLE IF EXISTS companies CASCADE');
-    
-    // Create the table
-    console.log('Creating companies table...');
-    await pool.query(`
-      CREATE TABLE companies (
-        id SERIAL PRIMARY KEY,
-        salesforce_access_token TEXT,
-        salesforce_refresh_token TEXT,
-        salesforce_instance_url TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    // Check if companies table exists
+    const tableExists = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'companies'
       );
     `);
-    console.log('Companies table created successfully');
+
+    if (!tableExists.rows[0].exists) {
+      console.log('Creating companies table...');
+      await pool.query(`
+        CREATE TABLE companies (
+          id SERIAL PRIMARY KEY,
+          salesforce_access_token TEXT,
+          salesforce_refresh_token TEXT,
+          salesforce_instance_url TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      console.log('Companies table created successfully');
+    } else {
+      console.log('Companies table already exists');
+    }
 
     // Verify the table structure
     const tableInfo = await pool.query(`
