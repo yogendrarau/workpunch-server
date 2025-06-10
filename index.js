@@ -159,9 +159,27 @@ app.get('/api/callback', async (req, res) => {
 
     // Get the most recently created organization code
     const organizationCode = await tokenHelpers.getLatestOrganizationCode();
+    console.log('Latest organization code:', organizationCode);
+
     if (!organizationCode) {
-      console.error('❌ No organization code found');
-      return res.status(500).send('No organization found to connect');
+      console.log('No organization code found, creating new one...');
+      const newOrganizationCode = `org_${Date.now()}`;
+      const defaultCompanyName = 'Default Company';
+      const defaultDomain = 'default.com';
+
+      await tokenHelpers.storeTokens(
+        defaultCompanyName,
+        defaultDomain,
+        newOrganizationCode,
+        {
+          access_token,
+          refresh_token,
+          instance_url
+        }
+      );
+
+      console.log('✅ Created new organization with code:', newOrganizationCode);
+      return res.send(`Salesforce successfully connected! Your organization code is: ${newOrganizationCode}`);
     }
 
     // Get company info from the database

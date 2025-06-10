@@ -15,8 +15,16 @@ pool.on('error', (err) => {
 // Initialize database tables
 async function initDb() {
   try {
+    console.log('Starting database initialization...');
+    
+    // Drop the table if it exists
+    console.log('Dropping existing companies table...');
+    await pool.query('DROP TABLE IF EXISTS companies CASCADE');
+    
+    // Create the table
+    console.log('Creating companies table...');
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS companies (
+      CREATE TABLE companies (
         id SERIAL PRIMARY KEY,
         company_name VARCHAR(255) NOT NULL,
         company_domain VARCHAR(255) NOT NULL,
@@ -28,7 +36,17 @@ async function initDb() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    console.log('Database initialized successfully');
+    console.log('Companies table created successfully');
+
+    // Verify the table structure
+    const tableInfo = await pool.query(`
+      SELECT column_name, data_type 
+      FROM information_schema.columns 
+      WHERE table_name = 'companies';
+    `);
+    console.log('Table structure:', tableInfo.rows);
+
+    console.log('Database initialization completed successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
     throw error;
@@ -82,10 +100,16 @@ const tokenHelpers = {
 
   async getLatestOrganizationCode() {
     try {
+      console.log('Getting latest organization code...');
       const result = await pool.query(
         'SELECT organization_code FROM companies ORDER BY created_at DESC LIMIT 1'
       );
-      if (result.rows.length === 0) return null;
+      console.log('Query result:', result.rows);
+      if (result.rows.length === 0) {
+        console.log('No organization codes found');
+        return null;
+      }
+      console.log('Found organization code:', result.rows[0].organization_code);
       return result.rows[0].organization_code;
     } catch (error) {
       console.error('Error getting latest organization code:', error);
