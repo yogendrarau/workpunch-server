@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const { pool, tokenHelpers } = require('./db');
+const { pool, tokenHelpers, initDb } = require('./db');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -25,6 +25,39 @@ let serverState = {
 };
 
 const app = express();
+
+// Initialize database before starting the server
+async function startServer() {
+  try {
+    console.log('Initializing database...');
+    await initDb();
+    console.log('Database initialized successfully');
+
+    const PORT = process.env.PORT || 3000;
+    const server = app.listen(PORT, () => {
+      serverState.startTime = new Date().toISOString();
+      console.log(`[${serverState.startTime}] Server is running on port ${PORT}`);
+      console.log('Available routes:');
+      console.log('GET  /');
+      console.log('GET  /ping');
+      console.log('GET  /api/test');
+      console.log('GET  /api/callback');
+    });
+
+    // Handle server errors
+    server.on('error', (error) => {
+      console.error('Server error:', error);
+    });
+
+    // Handle server close
+    server.on('close', () => {
+      console.log('Server is shutting down...');
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
 
 // Debug middleware - log ALL requests before any other middleware
 app.use((req, res, next) => {
@@ -479,23 +512,5 @@ app.use((req, res) => {
   res.status(404).send('Not Found');
 });
 
-const PORT = process.env.PORT || 3000;
-const server = app.listen(PORT, () => {
-  serverState.startTime = new Date().toISOString();
-  console.log(`[${serverState.startTime}] Server is running on port ${PORT}`);
-  console.log('Available routes:');
-  console.log('GET  /');
-  console.log('GET  /ping');
-  console.log('GET  /api/test');
-  console.log('GET  /api/callback');
-});
-
-// Handle server errors
-server.on('error', (error) => {
-  console.error('Server error:', error);
-});
-
-// Handle server close
-server.on('close', () => {
-  console.log('Server is shutting down...');
-});
+// Start the server
+startServer();
