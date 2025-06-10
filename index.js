@@ -286,11 +286,15 @@ app.post('/api/sync-clock', async (req, res) => {
   const { userId, clockIn, clockOut, isRemote } = req.body;
 
   try {
-    const tokens = await tokenHelpers.getTokens();
-    if (!tokens) {
-      return res.status(404).json({ error: 'No Salesforce connection found' });
+    // Get the company tokens from the database
+    const result = await pool.query('SELECT * FROM companies ORDER BY created_at DESC LIMIT 1');
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No company found in database' });
     }
 
+    const company = result.rows[0];
+    
+    // Create the record payload for Salesforce
     const recordPayload = {
       Punch_In_Time__c: clockIn,
       Punch_Out_Time__c: clockOut,
@@ -298,12 +302,17 @@ app.post('/api/sync-clock', async (req, res) => {
       Employee_Email__c: userId
     };
 
-    const response = await axios.post(`${tokens.instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
-      headers: {
-        Authorization: `Bearer ${tokens.access_token}`,
-        'Content-Type': 'application/json'
+    // Send to Salesforce using the stored tokens
+    const response = await axios.post(
+      `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`,
+      recordPayload,
+      {
+        headers: {
+          Authorization: `Bearer ${company.salesforce_access_token}`,
+          'Content-Type': 'application/json'
+        }
       }
-    });
+    );
 
     res.status(200).json({ success: true, salesforceId: response.data.id });
   } catch (error) {
