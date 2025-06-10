@@ -94,7 +94,7 @@ app.get('/api/callback', async (req, res) => {
   console.log('Query params:', req.query);
   console.log('Headers:', req.headers);
   
-  const { code } = req.query;
+  const { code, state } = req.query;
 
   if (!code) {
     console.error('No authorization code received');
@@ -102,6 +102,14 @@ app.get('/api/callback', async (req, res) => {
   }
 
   try {
+    // Parse state parameter to get tenant ID and company name
+    const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+    const { tenantId, companyName } = stateData;
+
+    if (!tenantId || !companyName) {
+      throw new Error('Missing tenant ID or company name in state');
+    }
+
     const tokenRequestParams = {
       grant_type: 'authorization_code',
       client_id: process.env.SALESFORCE_CLIENT_ID,
@@ -124,13 +132,13 @@ app.get('/api/callback', async (req, res) => {
     }
 
     console.log('💾 Storing tokens in DB...');
-    await tokenHelpers.storeTokens('NewCompany', {
+    await tokenHelpers.storeTokens(companyName, tenantId, {
       access_token,
       refresh_token,
       instance_url
     });
 
-    console.log('✅ Tokens stored successfully for NewCompany');
+    console.log('✅ Tokens stored successfully for company:', companyName);
     return res.send('Salesforce successfully connected! You can close this window.');
   } catch (error) {
     console.error('❌ Salesforce auth error:', {
@@ -196,14 +204,30 @@ app.delete('/api/tokens/:companyName', async (req, res) => {
   }
 });
 
+// Get company info by tenant ID
+app.get('/api/company/:tenantId', async (req, res) => {
+  try {
+    const { tenantId } = req.params;
+    const tokens = await tokenHelpers.getTokensByTenantId(tenantId);
+    
+    if (!tokens) {
+      return res.status(404).json({ error: 'Company not found for this tenant' });
+    }
+
+    res.status(200).json(tokens);
+  } catch (error) {
+    console.error('Error retrieving company info:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Sync user data endpoint
 app.post('/api/sync-user', async (req, res) => {
   try {
-    const { id, name, clockRecords, totalRemoteHours, totalInPersonHours } = req.body;
-    const companyName = name; // Using name as company name for now
+    const { id, name, clockRecords, totalRemoteHours, totalInPersonHours, tenantId } = req.body;
 
-    const tokens = await tokenHelpers.getTokens(companyName);
-    if (!tokens) return res.status(404).json({ error: 'Company not authorized' });
+    const tokens = await tokenHelpers.getTokensByTenantId(tenantId);
+    if (!tokens) return res.status(404).json({ error: 'Company not authorized for this tenant' });
 
     // Sync each clock record to Salesforce
     for (const record of clockRecords) {
@@ -231,11 +255,11 @@ app.post('/api/sync-user', async (req, res) => {
 
 // Sync individual clock record endpoint
 app.post('/api/sync-clock', async (req, res) => {
-  const { userId, clockIn, clockOut, isRemote, companyName } = req.body;
+  const { userId, clockIn, clockOut, isRemote, tenantId } = req.body;
 
   try {
-    const tokens = await tokenHelpers.getTokens(companyName);
-    if (!tokens) return res.status(404).json({ error: 'Company not authorized' });
+    const tokens = await tokenHelpers.getTokensByTenantId(tenantId);
+    if (!tokens) return res.status(404).json({ error: 'Company not authorized for this tenant' });
 
     const recordPayload = {
       Punch_In_Time__c: clockIn,

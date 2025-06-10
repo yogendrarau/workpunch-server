@@ -1,111 +1,94 @@
 const { Pool } = require('pg');
 
-// Create a new pool using the connection string from environment variables
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
-
-// Test DB connection immediately
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) {
-    console.error('❌ DB CONNECTION FAILED:', err.message);
-  } else {
-    console.log('✅ DB CONNECTED — current time:', res.rows[0].now);
-  }
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  password: process.env.DB_PASSWORD,
+  port: process.env.DB_PORT,
 });
 
 // Initialize database tables
-const initializeDatabase = async () => {
+async function initDb() {
   try {
-    console.log('🔧 Initializing companies table...');
     await pool.query(`
       CREATE TABLE IF NOT EXISTS companies (
         id SERIAL PRIMARY KEY,
-        company_name TEXT NOT NULL UNIQUE,
-        access_token TEXT,
-        refresh_token TEXT,
-        instance_url TEXT,
+        company_name VARCHAR(255) NOT NULL,
+        tenant_id VARCHAR(255) UNIQUE NOT NULL,
+        salesforce_access_token TEXT,
+        salesforce_refresh_token TEXT,
+        salesforce_instance_url TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_token_refresh TIMESTAMP,
-        is_active BOOLEAN DEFAULT TRUE
-      )
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
     `);
-
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_company_name ON companies(company_name)');
-    console.log('✅ Table check complete');
+    console.log('Database initialized successfully');
   } catch (error) {
-    console.error('❌ Error initializing database:', error.message);
+    console.error('Error initializing database:', error);
     throw error;
   }
-};
+}
 
-// Initialize on load
-initializeDatabase();
-
-// Helper functions for token management
 const tokenHelpers = {
-  // Store or update company tokens
-  storeTokens: async (companyName, tokens) => {
+  async storeTokens(companyName, tenantId, tokens) {
     const { access_token, refresh_token, instance_url } = tokens;
-    const now = new Date().toISOString();
-
-    console.log(`🟡 Storing tokens for company: ${companyName}`);
-    console.log(`🟡 Instance URL sample: ${instance_url?.slice(0, 30)}...`);
-
     try {
-      const result = await pool.query(
-        `INSERT INTO companies (company_name, access_token, refresh_token, instance_url, created_at, updated_at, last_token_refresh)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT(company_name) DO UPDATE SET
-           access_token = EXCLUDED.access_token,
-           refresh_token = EXCLUDED.refresh_token,
-           instance_url = EXCLUDED.instance_url,
-           updated_at = EXCLUDED.updated_at,
-           last_token_refresh = EXCLUDED.last_token_refresh
-         RETURNING id`,
-        [companyName, access_token, refresh_token, instance_url, now, now, now]
+      await pool.query(
+        `INSERT INTO companies (company_name, tenant_id, salesforce_access_token, salesforce_refresh_token, salesforce_instance_url)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (tenant_id) 
+         DO UPDATE SET 
+           company_name = $1,
+           salesforce_access_token = $3,
+           salesforce_refresh_token = $4,
+           salesforce_instance_url = $5,
+           updated_at = CURRENT_TIMESTAMP`,
+        [companyName, tenantId, access_token, refresh_token, instance_url]
       );
-
-      console.log(`✅ Tokens stored. Company ID: ${result.rows[0].id}`);
-      return result.rows[0].id;
     } catch (error) {
-      console.error('❌ Error storing tokens:', error.message);
+      console.error('Error storing tokens:', error);
       throw error;
     }
   },
 
-  // Get tokens
-  getTokens: async (companyName) => {
+  async getTokensByTenantId(tenantId) {
     try {
       const result = await pool.query(
-        'SELECT access_token, refresh_token, instance_url, last_token_refresh FROM companies WHERE company_name = $1 AND is_active = TRUE',
-        [companyName]
+        'SELECT * FROM companies WHERE tenant_id = $1',
+        [tenantId]
       );
-      return result.rows[0];
+      if (result.rows.length === 0) return null;
+      
+      const company = result.rows[0];
+      return {
+        companyName: company.company_name,
+        access_token: company.salesforce_access_token,
+        refresh_token: company.salesforce_refresh_token,
+        instance_url: company.salesforce_instance_url
+      };
     } catch (error) {
-      console.error('❌ Error getting tokens:', error.message);
+      console.error('Error getting tokens:', error);
       throw error;
     }
   },
 
-  // Invalidate tokens
-  invalidateTokens: async (companyName) => {
+  async invalidateTokens(tenantId) {
     try {
       const result = await pool.query(
-        'UPDATE companies SET is_active = FALSE, updated_at = $1 WHERE company_name = $2',
-        [new Date().toISOString(), companyName]
+        'UPDATE companies SET salesforce_access_token = NULL, salesforce_refresh_token = NULL, salesforce_instance_url = NULL WHERE tenant_id = $1',
+        [tenantId]
       );
       return result.rowCount;
     } catch (error) {
-      console.error('❌ Error invalidating tokens:', error.message);
+      console.error('Error invalidating tokens:', error);
       throw error;
     }
   }
 };
 
 module.exports = {
-  pool,
+  db: pool,
+  initDb,
   tokenHelpers
 };
