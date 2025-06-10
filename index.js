@@ -304,11 +304,20 @@ app.post('/api/connect-salesforce', async (req, res) => {
     console.log('Original tenant ID:', tenantId);
     console.log('Encoded state:', state);
 
-    // Use the specific Workpunch Salesforce connection URL with simplified state
-    const authUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8&redirect_uri=https%3A%2F%2Fworkpunch-server.fly.dev%2Fapi%2Fcallback&scope=api%20refresh_token&state=${state}`;
+    // Build the authorization URL with proper encoding
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: '3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8',
+      redirect_uri: 'https://workpunch-server.fly.dev/api/callback',
+      scope: 'api refresh_token',
+      state: state
+    });
+
+    const authUrl = `https://login.salesforce.com/services/oauth2/authorize?${params.toString()}`;
 
     console.log('Generated auth URL:', authUrl);
     console.log('State parameter in URL:', state);
+    console.log('Full URL parameters:', params.toString());
 
     res.json({
       authUrl: authUrl
