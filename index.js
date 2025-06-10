@@ -95,25 +95,14 @@ app.get('/api/callback', async (req, res) => {
   console.log('Query params:', req.query);
   console.log('Headers:', req.headers);
   
-  const { code, state } = req.query;
+  const { code } = req.query;
 
   if (!code) {
     console.error('No authorization code received');
     return res.status(400).send('Authorization code is missing');
   }
 
-  if (!state) {
-    console.error('No state parameter received in callback');
-    console.log('Available query parameters:', Object.keys(req.query));
-    return res.status(400).send('State parameter is missing. Please try the authorization flow again.');
-  }
-
   try {
-    // Decode the state parameter to get tenant ID
-    const tenantId = decodeURIComponent(state);
-    console.log('Received state parameter:', state);
-    console.log('Decoded tenant ID:', tenantId);
-
     const tokenRequestParams = {
       grant_type: 'authorization_code',
       client_id: process.env.SALESFORCE_CLIENT_ID,
@@ -135,15 +124,34 @@ app.get('/api/callback', async (req, res) => {
       return res.status(500).send('Invalid response from Salesforce');
     }
 
-    console.log('💾 Storing tokens in DB...');
-    await tokenHelpers.storeTokens('Default Company', tenantId, {
-      access_token,
-      refresh_token,
-      instance_url
-    });
+    // Get the most recently created organization code
+    const organizationCode = await tokenHelpers.getLatestOrganizationCode();
+    if (!organizationCode) {
+      console.error('❌ No organization code found');
+      return res.status(500).send('No organization found to connect');
+    }
 
-    console.log('✅ Tokens stored successfully for tenant:', tenantId);
-    return res.send('Salesforce successfully connected! You can close this window.');
+    // Get company info from the database
+    const companyInfo = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
+    if (!companyInfo) {
+      console.error('❌ No company info found for organization code:', organizationCode);
+      return res.status(500).send('Company information not found');
+    }
+
+    // Store the tokens
+    await tokenHelpers.storeTokens(
+      companyInfo.companyName,
+      companyInfo.companyDomain,
+      organizationCode,
+      {
+        access_token,
+        refresh_token,
+        instance_url
+      }
+    );
+
+    console.log('✅ Tokens stored successfully for organization:', organizationCode);
+    return res.send(`Salesforce successfully connected! Your organization code is: ${organizationCode}`);
   } catch (error) {
     console.error('❌ Salesforce auth error:', {
       message: error.message,
@@ -208,14 +216,14 @@ app.delete('/api/tokens/:companyName', async (req, res) => {
   }
 });
 
-// Get company info by tenant ID
-app.get('/api/company/:tenantId', async (req, res) => {
+// Get company info by organization code
+app.get('/api/company/:organizationCode', async (req, res) => {
   try {
-    const { tenantId } = req.params;
-    const tokens = await tokenHelpers.getTokensByTenantId(tenantId);
+    const { organizationCode } = req.params;
+    const tokens = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
     
     if (!tokens) {
-      return res.status(404).json({ error: 'Company not found for this tenant' });
+      return res.status(404).json({ error: 'Company not found for this organization' });
     }
 
     res.status(200).json(tokens);
@@ -228,10 +236,10 @@ app.get('/api/company/:tenantId', async (req, res) => {
 // Sync user data endpoint
 app.post('/api/sync-user', async (req, res) => {
   try {
-    const { id, name, clockRecords, totalRemoteHours, totalInPersonHours, tenantId } = req.body;
+    const { id, name, clockRecords, totalRemoteHours, totalInPersonHours, organizationCode } = req.body;
 
-    const tokens = await tokenHelpers.getTokensByTenantId(tenantId);
-    if (!tokens) return res.status(404).json({ error: 'Company not authorized for this tenant' });
+    const tokens = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
+    if (!tokens) return res.status(404).json({ error: 'Company not authorized for this organization' });
 
     // Sync each clock record to Salesforce
     for (const record of clockRecords) {
@@ -259,11 +267,11 @@ app.post('/api/sync-user', async (req, res) => {
 
 // Sync individual clock record endpoint
 app.post('/api/sync-clock', async (req, res) => {
-  const { userId, clockIn, clockOut, isRemote, tenantId } = req.body;
+  const { userId, clockIn, clockOut, isRemote, organizationCode } = req.body;
 
   try {
-    const tokens = await tokenHelpers.getTokensByTenantId(tenantId);
-    if (!tokens) return res.status(404).json({ error: 'Company not authorized for this tenant' });
+    const tokens = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
+    if (!tokens) return res.status(404).json({ error: 'Company not authorized for this organization' });
 
     const recordPayload = {
       Punch_In_Time__c: clockIn,
@@ -291,36 +299,45 @@ app.post('/api/connect-salesforce', async (req, res) => {
   console.log('🔗 Connect Salesforce endpoint hit');
   console.log('Request body:', req.body);
 
-  const { tenantId, companyName } = req.body;
+  const { companyDomain, companyName } = req.body;
 
-  if (!tenantId || !companyName) {
-    console.error('Missing required fields:', { tenantId, companyName });
-    return res.status(400).json({ error: 'Missing required fields: tenantId and companyName' });
+  if (!companyDomain || !companyName) {
+    console.error('Missing required fields:', { companyDomain, companyName });
+    return res.status(400).json({ error: 'Missing required fields: companyDomain and companyName' });
   }
 
   try {
-    // Use tenantId as the state parameter
-    const state = encodeURIComponent(tenantId);
-    console.log('Original tenant ID:', tenantId);
-    console.log('Encoded state:', state);
+    // Generate organization code from timestamp
+    const organizationCode = `org_${Date.now()}`;
+    
+    // Store initial company record
+    await tokenHelpers.storeTokens(
+      companyName,
+      companyDomain,
+      organizationCode,
+      {
+        access_token: null,
+        refresh_token: null,
+        instance_url: null
+      }
+    );
 
-    // Build the authorization URL with proper encoding
+    // Build the authorization URL
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: '3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8',
       redirect_uri: 'https://workpunch-server.fly.dev/api/callback',
-      scope: 'api refresh_token',
-      state: state
+      scope: 'api refresh_token'
     });
 
-    const authUrl = `https://login.salesforce.com/services/oauth2/authorize?${params.toString()}`;
+    const authUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8&redirect_uri=https%3A%2F%2Fworkpunch-server.fly.dev%2Fapi%2Fcallback&scope=api%20refresh_token`;
 
     console.log('Generated auth URL:', authUrl);
-    console.log('State parameter in URL:', state);
-    console.log('Full URL parameters:', params.toString());
+    console.log('Organization code:', organizationCode);
 
     res.json({
-      authUrl: authUrl
+      success: true,
+      organizationCode: organizationCode
     });
   } catch (error) {
     console.error('Error generating auth URL:', error);
@@ -331,28 +348,28 @@ app.post('/api/connect-salesforce', async (req, res) => {
 // Verify Salesforce connection status
 app.get('/api/verify-salesforce-connection', async (req, res) => {
   console.log('🔍 Verify Salesforce connection endpoint hit');
-  const { tenantId } = req.query;
+  const { organizationCode, companyDomain } = req.query;
 
-  if (!tenantId) {
-    console.error('No tenant ID provided');
+  if (!organizationCode || !companyDomain) {
+    console.error('Missing required parameters');
     return res.status(400).json({
       connected: false,
-      message: 'Tenant ID is required'
+      message: 'Organization code and company domain are required'
     });
   }
 
   try {
-    const tokens = await tokenHelpers.getTokensByTenantId(tenantId);
+    const tokens = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
     
-    if (!tokens) {
-      console.log('No tokens found for tenant:', tenantId);
+    if (!tokens || tokens.companyDomain !== companyDomain) {
+      console.log('No valid connection found for organization:', organizationCode);
       return res.status(200).json({
         connected: false,
         message: 'Not connected to Salesforce'
       });
     }
 
-    console.log('✅ Salesforce connection found for tenant:', tenantId);
+    console.log('✅ Salesforce connection found for organization:', organizationCode);
     return res.status(200).json({
       connected: true,
       message: 'Connected to Salesforce'
@@ -363,6 +380,84 @@ app.get('/api/verify-salesforce-connection', async (req, res) => {
       connected: false,
       message: 'Error checking connection'
     });
+  }
+});
+
+// Get employees from Salesforce
+app.get('/api/employees', async (req, res) => {
+  const { organizationCode, companyDomain } = req.query;
+
+  if (!organizationCode || !companyDomain) {
+    return res.status(400).json({ error: 'Organization code and company domain are required' });
+  }
+
+  try {
+    const tokens = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
+    if (!tokens || tokens.companyDomain !== companyDomain) {
+      return res.status(404).json({ error: 'Company not authorized for this organization' });
+    }
+
+    // Query Salesforce for employees and their clock records
+    const response = await axios.get(
+      `${tokens.instance_url}/services/data/v59.0/query`,
+      {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+        },
+        params: {
+          q: `
+            SELECT 
+              Employee_Email__c,
+              Employee_Name__c,
+              Punch_In_Time__c,
+              Punch_Out_Time__c,
+              Location_Type__c
+            FROM Workpunch__c
+            ORDER BY Employee_Email__c, Punch_In_Time__c DESC
+          `
+        }
+      }
+    );
+
+    // Group records by employee
+    const employeeMap = new Map();
+    response.data.records.forEach(record => {
+      if (!employeeMap.has(record.Employee_Email__c)) {
+        employeeMap.set(record.Employee_Email__c, {
+          id: record.Employee_Email__c,
+          name: record.Employee_Name__c,
+          clockRecords: [],
+          totalRemoteHours: 0,
+          totalInPersonHours: 0,
+          organizationCode: organizationCode
+        });
+      }
+
+      const employee = employeeMap.get(record.Employee_Email__c);
+      if (record.Punch_In_Time__c) {
+        const clockRecord = {
+          clockIn: new Date(record.Punch_In_Time__c),
+          clockOut: record.Punch_Out_Time__c ? new Date(record.Punch_Out_Time__c) : null,
+          isRemote: record.Location_Type__c === 'Remote'
+        };
+        employee.clockRecords.push(clockRecord);
+
+        // Calculate hours if clocked out
+        if (clockRecord.clockOut) {
+          const hours = (clockRecord.clockOut - clockRecord.clockIn) / (1000 * 60 * 60);
+          if (clockRecord.isRemote) {
+            employee.totalRemoteHours += hours;
+          } else {
+            employee.totalInPersonHours += hours;
+          }
+        }
+      }
+    });
+
+    res.json(Array.from(employeeMap.values()));
+  } catch (error) {
+    console.error('Error fetching employees from Salesforce:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to fetch employees from Salesforce' });
   }
 });
 
