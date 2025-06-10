@@ -314,6 +314,44 @@ app.post('/api/connect-salesforce', async (req, res) => {
   }
 });
 
+// Verify Salesforce connection status
+app.get('/api/verify-salesforce-connection', async (req, res) => {
+  console.log('🔍 Verify Salesforce connection endpoint hit');
+  const { tenantId } = req.query;
+
+  if (!tenantId) {
+    console.error('No tenant ID provided');
+    return res.status(400).json({
+      connected: false,
+      message: 'Tenant ID is required'
+    });
+  }
+
+  try {
+    const tokens = await tokenHelpers.getTokensByTenantId(tenantId);
+    
+    if (!tokens) {
+      console.log('No tokens found for tenant:', tenantId);
+      return res.status(200).json({
+        connected: false,
+        message: 'Not connected to Salesforce'
+      });
+    }
+
+    console.log('✅ Salesforce connection found for tenant:', tenantId);
+    return res.status(200).json({
+      connected: true,
+      message: 'Connected to Salesforce'
+    });
+  } catch (error) {
+    console.error('Error checking Salesforce connection:', error);
+    return res.status(500).json({
+      connected: false,
+      message: 'Error checking connection'
+    });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error handler:', {
