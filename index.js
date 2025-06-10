@@ -176,74 +176,74 @@ app.get('/api/callback', async (req, res) => {
   }
 });
 
-// Token management endpoints
-app.post('/api/tokens', async (req, res) => {
+// Get employees from Salesforce
+app.get('/api/employees', async (req, res) => {
   try {
-    const { company_name, access_token, refresh_token, instance_url } = req.body;
-    
-    if (!company_name || !access_token || !refresh_token || !instance_url) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    const tokens = await tokenHelpers.getTokens();
+    if (!tokens) {
+      return res.status(404).json({ error: 'No Salesforce connection found' });
     }
 
-    await tokenHelpers.storeTokens(company_name, {
-      access_token,
-      refresh_token,
-      instance_url
+    // Query Salesforce for employees and their clock records
+    const response = await axios.get(
+      `${tokens.instance_url}/services/data/v59.0/query`,
+      {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+        },
+        params: {
+          q: `
+            SELECT 
+              Employee_Email__c,
+              Employee_Name__c,
+              Punch_In_Time__c,
+              Punch_Out_Time__c,
+              Location_Type__c
+            FROM Workpunch__c
+            ORDER BY Employee_Email__c, Punch_In_Time__c DESC
+          `
+        }
+      }
+    );
+
+    // Group records by employee
+    const employeeMap = new Map();
+    response.data.records.forEach(record => {
+      if (!employeeMap.has(record.Employee_Email__c)) {
+        employeeMap.set(record.Employee_Email__c, {
+          id: record.Employee_Email__c,
+          name: record.Employee_Name__c,
+          clockRecords: [],
+          totalRemoteHours: 0,
+          totalInPersonHours: 0
+        });
+      }
+
+      const employee = employeeMap.get(record.Employee_Email__c);
+      if (record.Punch_In_Time__c) {
+        const clockRecord = {
+          clockIn: new Date(record.Punch_In_Time__c),
+          clockOut: record.Punch_Out_Time__c ? new Date(record.Punch_Out_Time__c) : null,
+          isRemote: record.Location_Type__c === 'Remote'
+        };
+        employee.clockRecords.push(clockRecord);
+
+        // Calculate hours if clocked out
+        if (clockRecord.clockOut) {
+          const hours = (clockRecord.clockOut - clockRecord.clockIn) / (1000 * 60 * 60);
+          if (clockRecord.isRemote) {
+            employee.totalRemoteHours += hours;
+          } else {
+            employee.totalInPersonHours += hours;
+          }
+        }
+      }
     });
 
-    res.status(200).json({ message: 'Tokens stored successfully' });
+    res.json(Array.from(employeeMap.values()));
   } catch (error) {
-    console.error('Error storing tokens:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-app.get('/api/tokens/:companyName', async (req, res) => {
-  try {
-    const { companyName } = req.params;
-    const tokens = await tokenHelpers.getTokens(companyName);
-    
-    if (!tokens) {
-      return res.status(404).json({ error: 'Company not found or tokens invalid' });
-    }
-
-    res.status(200).json(tokens);
-  } catch (error) {
-    console.error('Error retrieving tokens:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-app.delete('/api/tokens/:companyName', async (req, res) => {
-  try {
-    const { companyName } = req.params;
-    const result = await tokenHelpers.invalidateTokens(companyName);
-    
-    if (result === 0) {
-      return res.status(404).json({ error: 'Company not found' });
-    }
-
-    res.status(200).json({ message: 'Tokens invalidated successfully' });
-  } catch (error) {
-    console.error('Error invalidating tokens:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Get company info by organization code
-app.get('/api/company/:organizationCode', async (req, res) => {
-  try {
-    const { organizationCode } = req.params;
-    const tokens = await tokenHelpers.getTokensByOrganizationCode(organizationCode);
-    
-    if (!tokens) {
-      return res.status(404).json({ error: 'Company not found for this organization' });
-    }
-
-    res.status(200).json(tokens);
-  } catch (error) {
-    console.error('Error retrieving company info:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error fetching employees from Salesforce:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to fetch employees from Salesforce' });
   }
 });
 
@@ -356,77 +356,6 @@ app.get('/api/verify-salesforce-connection', async (req, res) => {
       connected: false,
       message: 'Error checking connection'
     });
-  }
-});
-
-// Get employees from Salesforce
-app.get('/api/employees', async (req, res) => {
-  try {
-    const tokens = await tokenHelpers.getTokens();
-    if (!tokens) {
-      return res.status(404).json({ error: 'No Salesforce connection found' });
-    }
-
-    // Query Salesforce for employees and their clock records
-    const response = await axios.get(
-      `${tokens.instance_url}/services/data/v59.0/query`,
-      {
-        headers: {
-          Authorization: `Bearer ${tokens.access_token}`,
-        },
-        params: {
-          q: `
-            SELECT 
-              Employee_Email__c,
-              Employee_Name__c,
-              Punch_In_Time__c,
-              Punch_Out_Time__c,
-              Location_Type__c
-            FROM Workpunch__c
-            ORDER BY Employee_Email__c, Punch_In_Time__c DESC
-          `
-        }
-      }
-    );
-
-    // Group records by employee
-    const employeeMap = new Map();
-    response.data.records.forEach(record => {
-      if (!employeeMap.has(record.Employee_Email__c)) {
-        employeeMap.set(record.Employee_Email__c, {
-          id: record.Employee_Email__c,
-          name: record.Employee_Name__c,
-          clockRecords: [],
-          totalRemoteHours: 0,
-          totalInPersonHours: 0
-        });
-      }
-
-      const employee = employeeMap.get(record.Employee_Email__c);
-      if (record.Punch_In_Time__c) {
-        const clockRecord = {
-          clockIn: new Date(record.Punch_In_Time__c),
-          clockOut: record.Punch_Out_Time__c ? new Date(record.Punch_Out_Time__c) : null,
-          isRemote: record.Location_Type__c === 'Remote'
-        };
-        employee.clockRecords.push(clockRecord);
-
-        // Calculate hours if clocked out
-        if (clockRecord.clockOut) {
-          const hours = (clockRecord.clockOut - clockRecord.clockIn) / (1000 * 60 * 60);
-          if (clockRecord.isRemote) {
-            employee.totalRemoteHours += hours;
-          } else {
-            employee.totalInPersonHours += hours;
-          }
-        }
-      }
-    });
-
-    res.json(Array.from(employeeMap.values()));
-  } catch (error) {
-    console.error('Error fetching employees from Salesforce:', error.response?.data || error.message);
-    res.status(500).json({ error: 'Failed to fetch employees from Salesforce' });
   }
 });
 
