@@ -107,21 +107,9 @@ app.get('/api/callback', async (req, res) => {
   }
 
   try {
-    // Parse state parameter to get tenant ID and company name
-    let stateData;
-    try {
-      stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-    } catch (parseError) {
-      console.error('Failed to parse state parameter:', parseError);
-      return res.status(400).send('Invalid state parameter. Please try the authorization flow again.');
-    }
-
-    const { tenantId, companyName } = stateData;
-
-    if (!tenantId || !companyName) {
-      console.error('Missing tenant ID or company name in state:', stateData);
-      return res.status(400).send('Invalid state data. Please try the authorization flow again.');
-    }
+    // Decode the state parameter to get tenant ID
+    const tenantId = decodeURIComponent(state);
+    console.log('Decoded tenant ID:', tenantId);
 
     const tokenRequestParams = {
       grant_type: 'authorization_code',
@@ -145,13 +133,13 @@ app.get('/api/callback', async (req, res) => {
     }
 
     console.log('💾 Storing tokens in DB...');
-    await tokenHelpers.storeTokens(companyName, tenantId, {
+    await tokenHelpers.storeTokens('Default Company', tenantId, {
       access_token,
       refresh_token,
       instance_url
     });
 
-    console.log('✅ Tokens stored successfully for company:', companyName);
+    console.log('✅ Tokens stored successfully for tenant:', tenantId);
     return res.send('Salesforce successfully connected! You can close this window.');
   } catch (error) {
     console.error('❌ Salesforce auth error:', {
@@ -308,20 +296,14 @@ app.post('/api/connect-salesforce', async (req, res) => {
   }
 
   try {
-    // Create state parameter with tenant ID and company name
-    const stateData = {
-      tenantId,
-      companyName
-    };
-    const state = Buffer.from(JSON.stringify(stateData)).toString('base64');
-    const encodedState = encodeURIComponent(state);
+    // Use tenantId as the state parameter
+    const state = encodeURIComponent(tenantId);
 
-    // Use the specific Workpunch Salesforce connection URL with properly encoded state
-    const authUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8&redirect_uri=https%3A%2F%2Fworkpunch-server.fly.dev%2Fapi%2Fcallback&scope=api%20refresh_token&state=${encodedState}`;
+    // Use the specific Workpunch Salesforce connection URL with simplified state
+    const authUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=3MVG9rZjd7MXFdLiWCf59z4DCGjghAZlWF7KXeBOX3mOvmrPJNArejq_0VHz1HuSTj.gZZ2KrlSLTekQYmEf8&redirect_uri=https%3A%2F%2Fworkpunch-server.fly.dev%2Fapi%2Fcallback&scope=api%20refresh_token&state=${state}`;
 
     console.log('Generated auth URL:', authUrl);
-    console.log('State data:', stateData);
-    console.log('Encoded state:', encodedState);
+    console.log('State:', state);
 
     res.json({
       authUrl: authUrl
