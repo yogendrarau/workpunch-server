@@ -554,13 +554,13 @@ app.post('/api/sync-clock', async (req, res) => {
           }
         );
         console.log(`✅ [Request ${requestId}] Record created successfully:`, response.data.id);
-        res.status(200).json({ success: true, salesforceId: response.data.id });
+        return res.status(200).json({ success: true, salesforceId: response.data.id });
       } catch (error) {
         console.error(`❌ [Request ${requestId}] Failed to create record:`, {
           error: error.message,
           response: error.response?.data
         });
-        res.status(500).json({ error: 'Failed to create record in Salesforce' });
+        return res.status(500).json({ error: 'Failed to create record in Salesforce' });
       }
     }
   } catch (error) {
