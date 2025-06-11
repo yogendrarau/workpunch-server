@@ -675,7 +675,7 @@ app.post('/api/sync-clock', async (req, res) => {
         Name: `${personName}-${dateStr}`,
         Punch_In_Time__c: clockInDate.toISOString(),
         Punch_Out_Time__c: null,
-        Location_Type__c: isRemote ? 'Remote' : 'In Office',
+        Location_Type__c: isRemote ? 'Remote' : 'In-Person',
         Employee_Email__c: userId
       };
 
