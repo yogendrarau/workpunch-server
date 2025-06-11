@@ -26,6 +26,36 @@ let serverState = {
 
 const app = express();
 
+// Add timezone mapping at the top of the file
+const TIMEZONE_MAP = {
+  // US Timezones
+  'EDT': 'America/New_York',
+  'EST': 'America/New_York',
+  'CDT': 'America/Chicago',
+  'CST': 'America/Chicago',
+  'MDT': 'America/Denver',
+  'MST': 'America/Denver',
+  'PDT': 'America/Los_Angeles',
+  'PST': 'America/Los_Angeles',
+  'AKDT': 'America/Anchorage',
+  'AKST': 'America/Anchorage',
+  'HADT': 'America/Adak',
+  'HAST': 'America/Adak',
+  'HST': 'Pacific/Honolulu',
+  
+  // Indian Timezones
+  'IST': 'Asia/Kolkata',
+  'IST-5:30': 'Asia/Kolkata',
+  'IST+5:30': 'Asia/Kolkata',
+  'India': 'Asia/Kolkata',
+  'Kolkata': 'Asia/Kolkata',
+  'Calcutta': 'Asia/Kolkata',
+  'Mumbai': 'Asia/Kolkata',
+  'Delhi': 'Asia/Kolkata',
+  'Chennai': 'Asia/Kolkata',
+  'Bangalore': 'Asia/Kolkata'
+};
+
 // Initialize database before starting the server
 async function startServer() {
   try {
@@ -339,6 +369,10 @@ app.post('/api/sync-clock', async (req, res) => {
     const month = String(clockInDate.getMonth() + 1).padStart(2, '0');
     const day = String(clockInDate.getDate()).padStart(2, '0');
     const dateStr = `${year}-${month}-${day}`;
+
+    // Convert timezone abbreviation to IANA format
+    const ianaTimezone = TIMEZONE_MAP[timezone] || 'America/New_York'; // Default to Eastern if unknown
+    console.log('🌍 Using timezone:', { original: timezone, iana: ianaTimezone });
     
     // If clocking out, find and update the existing record
     if (clockOut) {
@@ -390,7 +424,7 @@ app.post('/api/sync-clock', async (req, res) => {
         await axios.patch(
           `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c/${recordId}`,
           {
-            Punch_Out_Time__c: clockOutDate.toLocaleString('en-US', { timeZone: timezone })
+            Punch_Out_Time__c: clockOutDate.toLocaleString('en-US', { timeZone: ianaTimezone })
           },
           {
             headers: {
@@ -438,7 +472,7 @@ app.post('/api/sync-clock', async (req, res) => {
 
       const recordPayload = {
         Name: `${personName}-${dateStr}`,
-        Punch_In_Time__c: clockInDate.toLocaleString('en-US', { timeZone: timezone }),
+        Punch_In_Time__c: clockInDate.toLocaleString('en-US', { timeZone: ianaTimezone }),
         Punch_Out_Time__c: null,
         Location_Type__c: isRemote ? 'Remote' : 'In Office',
         Employee_Email__c: userId
