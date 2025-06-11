@@ -61,6 +61,9 @@ const TIMEZONE_MAP = {
   'Bangalore': 'Asia/Kolkata'
 };
 
+// Add after other constants
+const REFRESH_TOKEN_INTERVAL = 1000 * 60 * 60; // 1 hour
+
 // Initialize database before starting the server
 async function startServer() {
   try {
@@ -333,7 +336,62 @@ async function releaseLock(userId) {
 // Add request tracking
 const requestTracker = new Map();
 
-// Modify the sync-clock endpoint
+// Add after other functions
+async function refreshSalesforceToken(company) {
+  try {
+    console.log('🔄 Refreshing Salesforce token...');
+    const response = await axios.post(
+      `${company.salesforce_instance_url}/services/oauth2/token`,
+      null,
+      {
+        params: {
+          grant_type: 'refresh_token',
+          client_id: process.env.SALESFORCE_CLIENT_ID,
+          client_secret: process.env.SALESFORCE_CLIENT_SECRET,
+          refresh_token: company.salesforce_refresh_token
+        }
+      }
+    );
+
+    const { access_token } = response.data;
+    
+    // Update the token in the database
+    await pool.query(
+      'UPDATE companies SET salesforce_access_token = $1 WHERE id = $2',
+      [access_token, company.id]
+    );
+
+    console.log('✅ Salesforce token refreshed successfully');
+    return access_token;
+  } catch (error) {
+    console.error('❌ Failed to refresh Salesforce token:', error.message);
+    throw error;
+  }
+}
+
+// Add after other functions
+async function getValidSalesforceToken(company) {
+  try {
+    // Try to use the existing token
+    const response = await axios.get(
+      `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c/describe`,
+      {
+        headers: {
+          Authorization: `Bearer ${company.salesforce_access_token}`
+        }
+      }
+    );
+    return company.salesforce_access_token;
+  } catch (error) {
+    if (error.response?.status === 401) {
+      // Token is invalid, refresh it
+      return await refreshSalesforceToken(company);
+    }
+    throw error;
+  }
+}
+
+// Modify the sync-clock endpoint to use token refresh
 app.post('/api/sync-clock', async (req, res) => {
   const requestId = ++requestCount;
   const { userId, clockIn, clockOut, isRemote, timezone } = req.body;
@@ -401,6 +459,9 @@ app.post('/api/sync-clock', async (req, res) => {
 
     const company = result.rows[0];
     
+    // Get a valid Salesforce token
+    const accessToken = await getValidSalesforceToken(company);
+    
     // Extract name from email (everything before @)
     const personName = userId.split('@')[0];
     
@@ -452,7 +513,7 @@ app.post('/api/sync-clock', async (req, res) => {
         `${company.salesforce_instance_url}/services/data/v59.0/query`,
         {
           headers: {
-            Authorization: `Bearer ${company.salesforce_access_token}`,
+            Authorization: `Bearer ${accessToken}`,
           },
           params: {
             q: `
@@ -499,7 +560,7 @@ app.post('/api/sync-clock', async (req, res) => {
             },
             {
               headers: {
-                Authorization: `Bearer ${company.salesforce_access_token}`,
+                Authorization: `Bearer ${accessToken}`,
                 'Content-Type': 'application/json'
               }
             }
@@ -527,7 +588,7 @@ app.post('/api/sync-clock', async (req, res) => {
         `${company.salesforce_instance_url}/services/data/v59.0/query`,
         {
           headers: {
-            Authorization: `Bearer ${company.salesforce_access_token}`,
+            Authorization: `Bearer ${accessToken}`,
           },
           params: {
             q: `
@@ -584,7 +645,7 @@ app.post('/api/sync-clock', async (req, res) => {
           recordPayload,
           {
             headers: {
-              Authorization: `Bearer ${company.salesforce_access_token}`,
+              Authorization: `Bearer ${accessToken}`,
               'Content-Type': 'application/json'
             }
           }
