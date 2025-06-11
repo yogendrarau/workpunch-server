@@ -301,9 +301,9 @@ app.post('/api/sync-clock', async (req, res) => {
     const clockInDate = new Date(clockIn);
     const clockOutDate = clockOut ? new Date(clockOut) : null;
     
-    // Format date as YYYY-MM-DD using the local time
-    const dateStr = clockInDate.toLocaleDateString('en-US', { timeZone: timezone }).split(',')[0];
-
+    // Format date as YYYY-MM-DD using UTC to avoid timezone issues
+    const dateStr = clockInDate.toISOString().split('T')[0];
+    
     // If clocking out, find and update the existing record
     if (clockOut) {
       // Query Salesforce for the most recent record for this user that doesn't have a clock out time
