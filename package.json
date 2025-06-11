@@ -22,7 +22,8 @@
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.1.0",
     "pg": "^8.11.3",
-    "pg-hstore": "^2.3.4"
+    "pg-hstore": "^2.3.4",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@flydotio/dockerfile": "^0.7.10"

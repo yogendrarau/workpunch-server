@@ -5,6 +5,7 @@ const { pool, tokenHelpers, initDb } = require('./db');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const { v4: uuidv4 } = require('uuid');
 
 // Process level error handling
 process.on('uncaughtException', (error) => {
@@ -315,7 +316,21 @@ app.post('/api/sync-user', async (req, res) => {
   }
 });
 
-// Sync individual clock record endpoint
+// Add after other database setup
+async function acquireLock(userId) {
+  const lockId = uuidv4();
+  const result = await pool.query(
+    'INSERT INTO user_locks (user_id, lock_id, created_at) VALUES ($1, $2, NOW()) ON CONFLICT (user_id) DO NOTHING RETURNING lock_id',
+    [userId, lockId]
+  );
+  return result.rows[0]?.lock_id;
+}
+
+async function releaseLock(userId) {
+  await pool.query('DELETE FROM user_locks WHERE user_id = $1', [userId]);
+}
+
+// Modify the sync-clock endpoint
 app.post('/api/sync-clock', async (req, res) => {
   const requestId = ++requestCount;
   const { userId, clockIn, clockOut, isRemote, timezone } = req.body;
@@ -329,28 +344,16 @@ app.post('/api/sync-clock', async (req, res) => {
     timestamp: new Date().toISOString()
   });
 
-  // Check if there's already an active request for this user
-  if (activeRequests.has(userId)) {
-    const existingRequest = activeRequests.get(userId);
-    console.log(`⚠️ [Request ${requestId}] Found existing active request:`, {
-      existingRequestId: existingRequest.id,
-      timestamp: existingRequest.timestamp,
-      timeSinceLastRequest: Date.now() - existingRequest.timestamp
+  // Try to acquire a lock
+  const lockId = await acquireLock(userId);
+  if (!lockId) {
+    console.log(`⏭️ [Request ${requestId}] Skipping duplicate request - lock exists`);
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Request already being processed',
+      requestId
     });
-    
-    // If the last request was less than 5 seconds ago, ignore this one
-    if (Date.now() - existingRequest.timestamp < 5000) {
-      console.log(`⏭️ [Request ${requestId}] Skipping duplicate request`);
-      return res.status(200).json({ 
-        success: true, 
-        message: 'Request already being processed',
-        requestId: existingRequest.id
-      });
-    }
   }
-
-  // Mark this request as active for this user
-  activeRequests.set(userId, { id: requestId, timestamp: Date.now() });
 
   try {
     // Get the company tokens from the database
@@ -568,8 +571,8 @@ app.post('/api/sync-clock', async (req, res) => {
     });
     res.status(500).json({ error: 'Failed to sync to Salesforce' });
   } finally {
-    // Remove this request from active requests
-    activeRequests.delete(userId);
+    // Release the lock
+    await releaseLock(userId);
   }
 });
 
