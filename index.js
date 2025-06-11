@@ -287,35 +287,76 @@ app.get('/api/employees', async (req, res) => {
 
 // Sync user data endpoint
 app.post('/api/sync-user', async (req, res) => {
+  const { userId, name, email } = req.body;
+  console.log('Syncing user data:', { userId, name, email });
+
   try {
-    const { id, name, clockRecords, totalRemoteHours, totalInPersonHours } = req.body;
-
-    const tokens = await tokenHelpers.getTokens();
-    if (!tokens) {
-      return res.status(404).json({ error: 'No Salesforce connection found' });
+    // Get the company tokens from the database
+    const result = await pool.query('SELECT * FROM companies ORDER BY created_at DESC LIMIT 1');
+    if (result.rows.length === 0) {
+      console.log('No company found in database');
+      return res.status(404).json({ error: 'No company found in database' });
     }
 
-    // Sync each clock record to Salesforce
-    for (const record of clockRecords) {
-      const recordPayload = {
-        Punch_In_Time__c: record.clockIn,
-        Punch_Out_Time__c: record.clockOut,
-        Location_Type__c: record.isRemote ? 'Remote' : 'In Office',
-        Employee_Email__c: id
-      };
+    const company = result.rows[0];
+    
+    // Get a valid Salesforce token
+    const accessToken = await getValidSalesforceToken(company);
 
-      await axios.post(`${tokens.instance_url}/services/data/v59.0/sobjects/Workpunch__c`, recordPayload, {
+    // Query Salesforce for the user
+    const queryResponse = await axios.get(
+      `${company.salesforce_instance_url}/services/data/v59.0/query`,
+      {
         headers: {
-          Authorization: `Bearer ${tokens.access_token}`,
-          'Content-Type': 'application/json'
+          Authorization: `Bearer ${accessToken}`,
+        },
+        params: {
+          q: `
+            SELECT Id, Name, Email__c
+            FROM Workpunch_User__c
+            WHERE Email__c = '${email}'
+            LIMIT 1
+          `
         }
-      });
-    }
+      }
+    );
 
-    res.status(200).json({ success: true });
+    if (queryResponse.data.records && queryResponse.data.records.length > 0) {
+      // User exists, update if needed
+      const user = queryResponse.data.records[0];
+      if (user.Name !== name) {
+        await axios.patch(
+          `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch_User__c/${user.Id}`,
+          { Name: name },
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+      }
+      res.json({ success: true, salesforceId: user.Id });
+    } else {
+      // Create new user
+      const createResponse = await axios.post(
+        `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch_User__c`,
+        {
+          Name: name,
+          Email__c: email
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      res.json({ success: true, salesforceId: createResponse.data.id });
+    }
   } catch (error) {
     console.error('Error syncing user data:', error.response?.data || error.message);
-    res.status(500).json({ error: 'Failed to sync user data to Salesforce' });
+    res.status(500).json({ error: 'Failed to sync user data' });
   }
 });
 
