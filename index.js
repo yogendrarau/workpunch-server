@@ -285,10 +285,19 @@ app.post('/api/sync-user', async (req, res) => {
 app.post('/api/sync-clock', async (req, res) => {
   const { userId, clockIn, clockOut, isRemote, timezone } = req.body;
 
+  console.log('🔔 Sync clock request received:', {
+    userId,
+    clockIn,
+    clockOut,
+    isRemote,
+    timezone
+  });
+
   try {
     // Get the company tokens from the database
     const result = await pool.query('SELECT * FROM companies ORDER BY created_at DESC LIMIT 1');
     if (result.rows.length === 0) {
+      console.log('❌ No company found in database');
       return res.status(404).json({ error: 'No company found in database' });
     }
 
@@ -297,15 +306,43 @@ app.post('/api/sync-clock', async (req, res) => {
     // Extract name from email (everything before @)
     const personName = userId.split('@')[0];
     
-    // Parse the dates and ensure they're in the correct timezone
+    // Parse the dates using the phone's local time
     const clockInDate = new Date(clockIn);
     const clockOutDate = clockOut ? new Date(clockOut) : null;
+
+    console.log('📅 Parsed dates:', {
+      clockInDate: clockInDate.toLocaleString(),
+      clockOutDate: clockOutDate ? clockOutDate.toLocaleString() : null
+    });
+
+    // Validate dates
+    if (isNaN(clockInDate.getTime())) {
+      console.log('❌ Invalid clock in date:', clockIn);
+      return res.status(400).json({ error: 'Invalid clock in date' });
+    }
+    if (clockOutDate && isNaN(clockOutDate.getTime())) {
+      console.log('❌ Invalid clock out date:', clockOut);
+      return res.status(400).json({ error: 'Invalid clock out date' });
+    }
+
+    // Ensure clock out is after clock in
+    if (clockOutDate && clockOutDate <= clockInDate) {
+      console.log('❌ Clock out time must be after clock in time:', {
+        clockIn: clockInDate.toLocaleString(),
+        clockOut: clockOutDate.toLocaleString()
+      });
+      return res.status(400).json({ error: 'Clock out time must be after clock in time' });
+    }
     
-    // Format date as YYYY-MM-DD using UTC to avoid timezone issues
-    const dateStr = clockInDate.toISOString().split('T')[0];
+    // Format date as YYYY-MM-DD using the phone's local time
+    const year = clockInDate.getFullYear();
+    const month = String(clockInDate.getMonth() + 1).padStart(2, '0');
+    const day = String(clockInDate.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
     
     // If clocking out, find and update the existing record
     if (clockOut) {
+      console.log('🔍 Looking for existing clock-in record to update...');
       // Query Salesforce for the most recent record for this user that doesn't have a clock out time
       const queryResponse = await axios.get(
         `${company.salesforce_instance_url}/services/data/v59.0/query`,
@@ -315,7 +352,7 @@ app.post('/api/sync-clock', async (req, res) => {
           },
           params: {
             q: `
-              SELECT Id 
+              SELECT Id, Punch_In_Time__c
               FROM Workpunch__c 
               WHERE Employee_Email__c = '${userId}'
               AND Punch_Out_Time__c = null
@@ -326,13 +363,34 @@ app.post('/api/sync-clock', async (req, res) => {
         }
       );
 
-      if (queryResponse.data.records.length > 0) {
+      console.log('📊 Query response:', {
+        recordCount: queryResponse.data.records?.length || 0,
+        records: queryResponse.data.records
+      });
+
+      if (queryResponse.data.records && queryResponse.data.records.length > 0) {
+        const record = queryResponse.data.records[0];
+        const existingClockIn = new Date(record.Punch_In_Time__c);
+        
+        console.log('⏰ Comparing times:', {
+          existingClockIn: existingClockIn.toLocaleString(),
+          newClockIn: clockInDate.toLocaleString(),
+          timeDifference: Math.abs(existingClockIn - clockInDate)
+        });
+
+        // Verify this is the correct record to update
+        if (Math.abs(existingClockIn - clockInDate) > 60000) { // More than 1 minute difference
+          console.log('❌ Clock in time mismatch');
+          return res.status(400).json({ error: 'Clock in time mismatch' });
+        }
+
         // Update the existing record
-        const recordId = queryResponse.data.records[0].Id;
+        const recordId = record.Id;
+        console.log('📝 Updating record:', recordId);
         await axios.patch(
           `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c/${recordId}`,
           {
-            Punch_Out_Time__c: clockOutDate.toISOString()
+            Punch_Out_Time__c: clockOutDate.toLocaleString('en-US', { timeZone: timezone })
           },
           {
             headers: {
@@ -341,20 +399,52 @@ app.post('/api/sync-clock', async (req, res) => {
             }
           }
         );
+        console.log('✅ Record updated successfully');
         return res.status(200).json({ success: true, salesforceId: recordId });
       }
     }
 
     // Only create a new record if we're clocking in
     if (!clockOut) {
+      console.log('🔍 Checking for existing active clock-in...');
+      // Check if there's already an active clock-in
+      const activeCheckResponse = await axios.get(
+        `${company.salesforce_instance_url}/services/data/v59.0/query`,
+        {
+          headers: {
+            Authorization: `Bearer ${company.salesforce_access_token}`,
+          },
+          params: {
+            q: `
+              SELECT Id
+              FROM Workpunch__c 
+              WHERE Employee_Email__c = '${userId}'
+              AND Punch_Out_Time__c = null
+              LIMIT 1
+            `
+          }
+        }
+      );
+
+      console.log('📊 Active check response:', {
+        recordCount: activeCheckResponse.data.records?.length || 0,
+        records: activeCheckResponse.data.records
+      });
+
+      if (activeCheckResponse.data.records && activeCheckResponse.data.records.length > 0) {
+        console.log('❌ Already clocked in');
+        return res.status(400).json({ error: 'Already clocked in' });
+      }
+
       const recordPayload = {
         Name: `${personName}-${dateStr}`,
-        Punch_In_Time__c: clockInDate.toISOString(),
+        Punch_In_Time__c: clockInDate.toLocaleString('en-US', { timeZone: timezone }),
         Punch_Out_Time__c: null,
         Location_Type__c: isRemote ? 'Remote' : 'In Office',
         Employee_Email__c: userId
       };
 
+      console.log('📝 Creating new record:', recordPayload);
       const response = await axios.post(
         `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`,
         recordPayload,
@@ -366,12 +456,18 @@ app.post('/api/sync-clock', async (req, res) => {
         }
       );
 
+      console.log('✅ Record created successfully:', response.data.id);
       res.status(200).json({ success: true, salesforceId: response.data.id });
     } else {
+      console.log('❌ No active clock-in record found to update');
       res.status(404).json({ error: 'No active clock-in record found to update' });
     }
   } catch (error) {
-    console.error('Salesforce sync error:', error.response?.data || error.message);
+    console.error('❌ Salesforce sync error:', {
+      message: error.message,
+      response: error.response?.data,
+      status: error.response?.status
+    });
     res.status(500).json({ error: 'Failed to sync to Salesforce' });
   }
 });
