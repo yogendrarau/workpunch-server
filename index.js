@@ -450,10 +450,11 @@ app.post('/api/sync-clock', async (req, res) => {
           },
           params: {
             q: `
-              SELECT Id
+              SELECT Id, Punch_In_Time__c, Location_Type__c, Name
               FROM Workpunch__c 
               WHERE Employee_Email__c = '${userId}'
               AND Punch_Out_Time__c = null
+              ORDER BY Punch_In_Time__c DESC
               LIMIT 1
             `
           }
@@ -466,8 +467,25 @@ app.post('/api/sync-clock', async (req, res) => {
       });
 
       if (activeCheckResponse.data.records && activeCheckResponse.data.records.length > 0) {
-        console.log('❌ Already clocked in');
-        return res.status(400).json({ error: 'Already clocked in' });
+        const existingRecord = activeCheckResponse.data.records[0];
+        console.log('ℹ️ Found existing active clock-in:', {
+          id: existingRecord.Id,
+          name: existingRecord.Name,
+          punchInTime: existingRecord.Punch_In_Time__c,
+          locationType: existingRecord.Location_Type__c
+        });
+
+        // Return success with existing record info
+        return res.status(200).json({
+          success: true,
+          message: 'Already clocked in',
+          existingRecord: {
+            id: existingRecord.Id,
+            name: existingRecord.Name,
+            punchInTime: existingRecord.Punch_In_Time__c,
+            locationType: existingRecord.Location_Type__c
+          }
+        });
       }
 
       const recordPayload = {
