@@ -303,10 +303,10 @@ app.post('/api/sync-clock', async (req, res) => {
     
     // Format date as YYYY-MM-DD using the local time
     const dateStr = clockInDate.toLocaleDateString('en-US', { timeZone: timezone }).split(',')[0];
-    
+
     // If clocking out, find and update the existing record
     if (clockOut) {
-      // Query Salesforce for the most recent record for this user on this date
+      // Query Salesforce for the most recent record for this user that doesn't have a clock out time
       const queryResponse = await axios.get(
         `${company.salesforce_instance_url}/services/data/v59.0/query`,
         {
@@ -318,8 +318,8 @@ app.post('/api/sync-clock', async (req, res) => {
               SELECT Id 
               FROM Workpunch__c 
               WHERE Employee_Email__c = '${userId}'
-              AND Punch_In_Time__c = ${clockInDate.toISOString()}
-              ORDER BY CreatedDate DESC 
+              AND Punch_Out_Time__c = null
+              ORDER BY Punch_In_Time__c DESC 
               LIMIT 1
             `
           }
@@ -345,27 +345,31 @@ app.post('/api/sync-clock', async (req, res) => {
       }
     }
 
-    // If clocking in or no existing record found, create a new record
-    const recordPayload = {
-      Name: `${personName} - ${dateStr}`,
-      Punch_In_Time__c: clockInDate.toISOString(),
-      Punch_Out_Time__c: clockOutDate?.toISOString(),
-      Location_Type__c: isRemote ? 'Remote' : 'In Office',
-      Employee_Email__c: userId
-    };
+    // Only create a new record if we're clocking in
+    if (!clockOut) {
+      const recordPayload = {
+        Name: `${personName}-${dateStr}`,
+        Punch_In_Time__c: clockInDate.toISOString(),
+        Punch_Out_Time__c: null,
+        Location_Type__c: isRemote ? 'Remote' : 'In Office',
+        Employee_Email__c: userId
+      };
 
-    const response = await axios.post(
-      `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`,
-      recordPayload,
-      {
-        headers: {
-          Authorization: `Bearer ${company.salesforce_access_token}`,
-          'Content-Type': 'application/json'
+      const response = await axios.post(
+        `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`,
+        recordPayload,
+        {
+          headers: {
+            Authorization: `Bearer ${company.salesforce_access_token}`,
+            'Content-Type': 'application/json'
+          }
         }
-      }
-    );
+      );
 
-    res.status(200).json({ success: true, salesforceId: response.data.id });
+      res.status(200).json({ success: true, salesforceId: response.data.id });
+    } else {
+      res.status(404).json({ error: 'No active clock-in record found to update' });
+    }
   } catch (error) {
     console.error('Salesforce sync error:', error.response?.data || error.message);
     res.status(500).json({ error: 'Failed to sync to Salesforce' });
