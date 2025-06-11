@@ -417,7 +417,7 @@ app.post('/api/sync-clock', async (req, res) => {
           },
           params: {
             q: `
-              SELECT Id, Punch_In_Time__c
+              SELECT Id, Punch_In_Time__c, Name
               FROM Workpunch__c 
               WHERE Employee_Email__c = '${userId}'
               AND Punch_Out_Time__c = null
@@ -452,20 +452,31 @@ app.post('/api/sync-clock', async (req, res) => {
         // Update the existing record
         const recordId = record.Id;
         console.log(`📝 [Request ${requestId}] Updating record:`, recordId);
-        await axios.patch(
-          `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c/${recordId}`,
-          {
-            Punch_Out_Time__c: clockOutDate.toISOString()
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${company.salesforce_access_token}`,
-              'Content-Type': 'application/json'
+        try {
+          const updateResponse = await axios.patch(
+            `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c/${recordId}`,
+            {
+              Punch_Out_Time__c: clockOutDate.toISOString()
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${company.salesforce_access_token}`,
+                'Content-Type': 'application/json'
+              }
             }
-          }
-        );
-        console.log(`✅ [Request ${requestId}] Record updated successfully`);
-        return res.status(200).json({ success: true, salesforceId: recordId });
+          );
+          console.log(`✅ [Request ${requestId}] Record updated successfully:`, updateResponse.data);
+          return res.status(200).json({ success: true, salesforceId: recordId });
+        } catch (error) {
+          console.error(`❌ [Request ${requestId}] Failed to update record:`, {
+            error: error.message,
+            response: error.response?.data
+          });
+          return res.status(500).json({ error: 'Failed to update record in Salesforce' });
+        }
+      } else {
+        console.log(`❌ [Request ${requestId}] No active clock-in record found to update`);
+        return res.status(404).json({ error: 'No active clock-in record found to update' });
       }
     }
 
@@ -528,22 +539,26 @@ app.post('/api/sync-clock', async (req, res) => {
       };
 
       console.log(`📝 [Request ${requestId}] Creating new record:`, recordPayload);
-      const response = await axios.post(
-        `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`,
-        recordPayload,
-        {
-          headers: {
-            Authorization: `Bearer ${company.salesforce_access_token}`,
-            'Content-Type': 'application/json'
+      try {
+        const response = await axios.post(
+          `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`,
+          recordPayload,
+          {
+            headers: {
+              Authorization: `Bearer ${company.salesforce_access_token}`,
+              'Content-Type': 'application/json'
+            }
           }
-        }
-      );
-
-      console.log(`✅ [Request ${requestId}] Record created successfully:`, response.data.id);
-      res.status(200).json({ success: true, salesforceId: response.data.id });
-    } else {
-      console.log(`❌ [Request ${requestId}] No active clock-in record found to update`);
-      res.status(404).json({ error: 'No active clock-in record found to update' });
+        );
+        console.log(`✅ [Request ${requestId}] Record created successfully:`, response.data.id);
+        res.status(200).json({ success: true, salesforceId: response.data.id });
+      } catch (error) {
+        console.error(`❌ [Request ${requestId}] Failed to create record:`, {
+          error: error.message,
+          response: error.response?.data
+        });
+        res.status(500).json({ error: 'Failed to create record in Salesforce' });
+      }
     }
   } catch (error) {
     console.error(`❌ [Request ${requestId}] Salesforce sync error:`, {
