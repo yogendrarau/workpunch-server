@@ -316,93 +316,35 @@ app.post('/api/sync-user', async (req, res) => {
   }
 });
 
-// Add after other database setup
-async function acquireLock(userId) {
-  const lockId = uuidv4();
-  const result = await pool.query(
-    'INSERT INTO user_locks (user_id, lock_id, created_at) VALUES ($1, $2, NOW()) ON CONFLICT (user_id) DO NOTHING RETURNING lock_id',
-    [userId, lockId]
-  );
-  return result.rows[0]?.lock_id;
-}
-
-async function releaseLock(userId) {
-  await pool.query('DELETE FROM user_locks WHERE user_id = $1', [userId]);
-}
-
-// Modify the sync-clock endpoint
+// Remove all lock-related code
 app.post('/api/sync-clock', async (req, res) => {
-  const requestId = ++requestCount;
-  const { userId, clockIn, clockOut, isRemote, timezone } = req.body;
-
+  const requestId = Math.floor(Math.random() * 1000);
   console.log(`🔄 [Request ${requestId}] Sync clock request received:`, {
-    userId,
-    clockIn,
-    clockOut,
-    isRemote,
-    timezone,
+    userId: req.body.userId,
+    clockIn: req.body.clockIn,
+    clockOut: req.body.clockOut,
+    isRemote: req.body.isRemote,
+    timezone: req.body.timezone,
     timestamp: new Date().toISOString()
   });
 
-  // Try to acquire a lock
-  const lockId = await acquireLock(userId);
-  if (!lockId) {
-    console.log(`⏭️ [Request ${requestId}] Skipping duplicate request - lock exists`);
-    return res.status(200).json({ 
-      success: true, 
-      message: 'Request already being processed',
-      requestId
-    });
-  }
-
   try {
-    // Get the company tokens from the database
-    const result = await pool.query('SELECT * FROM companies ORDER BY created_at DESC LIMIT 1');
-    if (result.rows.length === 0) {
-      console.log(`❌ [Request ${requestId}] No company found in database`);
-      return res.status(404).json({ error: 'No company found in database' });
+    const { userId, clockIn, clockOut, isRemote, timezone, personName } = req.body;
+
+    // Get company info
+    const company = await getCompanyInfo();
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
     }
 
-    const company = result.rows[0];
-    
-    // Extract name from email (everything before @)
-    const personName = userId.split('@')[0];
-    
-    // Parse the dates using the phone's local time
+    // Parse dates
     const clockInDate = new Date(clockIn);
     const clockOutDate = clockOut ? new Date(clockOut) : null;
-
-    console.log(`📅 [Request ${requestId}] Parsed dates:`, {
-      clockInDate: clockInDate.toLocaleString(),
-      clockOutDate: clockOutDate ? clockOutDate.toLocaleString() : null,
-      clockInISO: clockInDate.toISOString(),
-      clockOutISO: clockOutDate ? clockOutDate.toISOString() : null
-    });
-
-    // Validate dates
-    if (isNaN(clockInDate.getTime())) {
-      console.log(`❌ [Request ${requestId}] Invalid clock in date:`, clockIn);
-      return res.status(400).json({ error: 'Invalid clock in date' });
-    }
-    if (clockOutDate && isNaN(clockOutDate.getTime())) {
-      console.log(`❌ [Request ${requestId}] Invalid clock out date:`, clockOut);
-      return res.status(400).json({ error: 'Invalid clock out date' });
-    }
-
-    // Ensure clock out is after clock in
-    if (clockOutDate && clockOutDate <= clockInDate) {
-      console.log(`❌ [Request ${requestId}] Clock out time must be after clock in time:`, {
-        clockIn: clockInDate.toLocaleString(),
-        clockOut: clockOutDate.toLocaleString()
-      });
-      return res.status(400).json({ error: 'Clock out time must be after clock in time' });
-    }
 
     // Convert timezone abbreviation to IANA format
     const ianaTimezone = TIMEZONE_MAP[timezone] || 'America/New_York'; // Default to Eastern if unknown
     console.log(`🌍 [Request ${requestId}] Using timezone:`, { original: timezone, iana: ianaTimezone });
 
-    // Handle clock out
     if (clockOut) {
       console.log(`🔍 [Request ${requestId}] Looking for existing clock-in record to update...`);
       // Query Salesforce for the most recent record for this user that doesn't have a clock out time
@@ -415,10 +357,10 @@ app.post('/api/sync-clock', async (req, res) => {
           params: {
             q: `
               SELECT Id, Punch_In_Time__c, Name
-              FROM Workpunch__c
+              FROM Workpunch__c 
               WHERE Employee_Email__c = '${userId}'
               AND Punch_Out_Time__c = null
-              ORDER BY Punch_In_Time__c DESC
+              ORDER BY Punch_In_Time__c DESC 
               LIMIT 1
             `
           }
@@ -478,9 +420,6 @@ app.post('/api/sync-clock', async (req, res) => {
 
       console.log(`✅ [Request ${requestId}] New clock-in record created successfully`);
     }
-
-    // Release the lock
-    await releaseLock(userId);
     
     res.status(200).json({ 
       success: true,
@@ -488,9 +427,6 @@ app.post('/api/sync-clock', async (req, res) => {
       requestId
     });
   } catch (error) {
-    // Release the lock in case of error
-    await releaseLock(userId);
-    
     console.error(`❌ [Request ${requestId}] Error:`, error.response?.data || error.message);
     res.status(500).json({ 
       error: 'Failed to sync clock record',
