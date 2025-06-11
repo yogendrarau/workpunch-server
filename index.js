@@ -397,17 +397,11 @@ app.post('/api/sync-clock', async (req, res) => {
       });
       return res.status(400).json({ error: 'Clock out time must be after clock in time' });
     }
-    
-    // Format date as YYYY-MM-DD using the phone's local time
-    const year = clockInDate.getFullYear();
-    const month = String(clockInDate.getMonth() + 1).padStart(2, '0');
-    const day = String(clockInDate.getDate()).padStart(2, '0');
-    const dateStr = `${year}-${month}-${day}`;
 
     // Convert timezone abbreviation to IANA format
     const ianaTimezone = TIMEZONE_MAP[timezone] || 'America/New_York'; // Default to Eastern if unknown
     console.log(`🌍 [Request ${requestId}] Using timezone:`, { original: timezone, iana: ianaTimezone });
-    
+
     // Handle clock out
     if (clockOut) {
       console.log(`🔍 [Request ${requestId}] Looking for existing clock-in record to update...`);
@@ -421,10 +415,10 @@ app.post('/api/sync-clock', async (req, res) => {
           params: {
             q: `
               SELECT Id, Punch_In_Time__c, Name
-              FROM Workpunch__c 
+              FROM Workpunch__c
               WHERE Employee_Email__c = '${userId}'
               AND Punch_Out_Time__c = null
-              ORDER BY Punch_In_Time__c DESC 
+              ORDER BY Punch_In_Time__c DESC
               LIMIT 1
             `
           }
@@ -432,117 +426,46 @@ app.post('/api/sync-clock', async (req, res) => {
       );
 
       console.log(`📊 [Request ${requestId}] Query response:`, {
-        recordCount: queryResponse.data.records?.length || 0,
+        recordCount: queryResponse.data.records.length,
         records: queryResponse.data.records
       });
 
-      if (!queryResponse.data.records || queryResponse.data.records.length === 0) {
+      if (queryResponse.data.records.length === 0) {
         console.log(`❌ [Request ${requestId}] No active clock-in record found to update`);
         return res.status(404).json({ error: 'No active clock-in record found to update' });
       }
 
       const record = queryResponse.data.records[0];
-      const existingClockIn = new Date(record.Punch_In_Time__c);
-      
-      console.log(`⏰ [Request ${requestId}] Comparing times:`, {
-        existingClockIn: existingClockIn.toLocaleString(),
-        newClockIn: clockInDate.toLocaleString(),
-        timeDifference: Math.abs(existingClockIn - clockInDate)
-      });
+      console.log(`📝 [Request ${requestId}] Updating record:`, record);
 
-      // Verify this is the correct record to update
-      if (Math.abs(existingClockIn - clockInDate) > 60000) { // More than 1 minute difference
-        console.log(`❌ [Request ${requestId}] Clock in time mismatch`);
-        return res.status(400).json({ error: 'Clock in time mismatch' });
-      }
-
-      // Update the existing record
-      const recordId = record.Id;
-      console.log(`📝 [Request ${requestId}] Updating record:`, recordId);
-      try {
-        const updateResponse = await axios.patch(
-          `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c/${recordId}`,
-          {
-            Punch_Out_Time__c: clockOutDate.toISOString()
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${company.salesforce_access_token}`,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        console.log(`✅ [Request ${requestId}] Record updated successfully:`, updateResponse.data);
-        return res.status(200).json({ success: true, salesforceId: recordId });
-      } catch (error) {
-        console.error(`❌ [Request ${requestId}] Failed to update record:`, {
-          error: error.message,
-          response: error.response?.data
-        });
-        return res.status(500).json({ error: 'Failed to update record in Salesforce' });
-      }
-    }
-
-    // Handle clock in
-    console.log(`🔍 [Request ${requestId}] Checking for existing active clock-in...`);
-    // Check if there's already an active clock-in
-    const activeCheckResponse = await axios.get(
-      `${company.salesforce_instance_url}/services/data/v59.0/query`,
-      {
-        headers: {
-          Authorization: `Bearer ${company.salesforce_access_token}`,
+      // Update the record with clock out time
+      await axios.patch(
+        `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c/${record.Id}`,
+        {
+          Punch_Out_Time__c: clockOutDate.toISOString()
         },
-        params: {
-          q: `
-            SELECT Id, Punch_In_Time__c, Location_Type__c, Name
-            FROM Workpunch__c 
-            WHERE Employee_Email__c = '${userId}'
-            AND Punch_Out_Time__c = null
-            ORDER BY Punch_In_Time__c DESC
-            LIMIT 1
-          `
+        {
+          headers: {
+            Authorization: `Bearer ${company.salesforce_access_token}`,
+            'Content-Type': 'application/json'
+          }
         }
-      }
-    );
+      );
 
-    console.log(`📊 [Request ${requestId}] Active check response:`, {
-      recordCount: activeCheckResponse.data.records?.length || 0,
-      records: activeCheckResponse.data.records
-    });
+      console.log(`✅ [Request ${requestId}] Record updated successfully`);
+    } else {
+      // Handle clock in - create new record
+      console.log(`📝 [Request ${requestId}] Creating new clock-in record...`);
+      
+      const recordPayload = {
+        Punch_In_Time__c: clockInDate.toISOString(),
+        Punch_Out_Time__c: null,
+        Location_Type__c: isRemote ? 'Remote' : 'In Office',
+        Employee_Email__c: userId,
+        Employee_Name__c: personName
+      };
 
-    if (activeCheckResponse.data.records && activeCheckResponse.data.records.length > 0) {
-      const existingRecord = activeCheckResponse.data.records[0];
-      console.log(`ℹ️ [Request ${requestId}] Found existing active clock-in:`, {
-        id: existingRecord.Id,
-        name: existingRecord.Name,
-        punchInTime: existingRecord.Punch_In_Time__c,
-        locationType: existingRecord.Location_Type__c
-      });
-
-      // Return success with existing record info
-      return res.status(200).json({
-        success: true,
-        message: 'Already clocked in',
-        existingRecord: {
-          id: existingRecord.Id,
-          name: existingRecord.Name,
-          punchInTime: existingRecord.Punch_In_Time__c,
-          locationType: existingRecord.Location_Type__c
-        }
-      });
-    }
-
-    const recordPayload = {
-      Name: `${personName}-${dateStr}`,
-      Punch_In_Time__c: clockInDate.toISOString(),
-      Punch_Out_Time__c: null,
-      Location_Type__c: isRemote ? 'Remote' : 'In Office',
-      Employee_Email__c: userId
-    };
-
-    console.log(`📝 [Request ${requestId}] Creating new record:`, recordPayload);
-    try {
-      const response = await axios.post(
+      await axios.post(
         `${company.salesforce_instance_url}/services/data/v59.0/sobjects/Workpunch__c`,
         recordPayload,
         {
@@ -552,25 +475,27 @@ app.post('/api/sync-clock', async (req, res) => {
           }
         }
       );
-      console.log(`✅ [Request ${requestId}] Record created successfully:`, response.data.id);
-      return res.status(200).json({ success: true, salesforceId: response.data.id });
-    } catch (error) {
-      console.error(`❌ [Request ${requestId}] Failed to create record:`, {
-        error: error.message,
-        response: error.response?.data
-      });
-      return res.status(500).json({ error: 'Failed to create record in Salesforce' });
+
+      console.log(`✅ [Request ${requestId}] New clock-in record created successfully`);
     }
-  } catch (error) {
-    console.error(`❌ [Request ${requestId}] Salesforce sync error:`, {
-      message: error.message,
-      response: error.response?.data,
-      status: error.response?.status
-    });
-    res.status(500).json({ error: 'Failed to sync to Salesforce' });
-  } finally {
+
     // Release the lock
     await releaseLock(userId);
+    
+    res.status(200).json({ 
+      success: true,
+      message: clockOut ? 'Clock out recorded' : 'Clock in recorded',
+      requestId
+    });
+  } catch (error) {
+    // Release the lock in case of error
+    await releaseLock(userId);
+    
+    console.error(`❌ [Request ${requestId}] Error:`, error.response?.data || error.message);
+    res.status(500).json({ 
+      error: 'Failed to sync clock record',
+      details: error.response?.data || error.message
+    });
   }
 });
 
